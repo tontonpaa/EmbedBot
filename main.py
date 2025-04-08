@@ -21,9 +21,21 @@ async def on_ready():
     print(f'{bot.user.name} has connected to Discord!')
     await bot.tree.sync() # グローバルコマンドを同期 (推奨)
 
+# グローバル変数で Cog がロード済みかどうかを管理する (簡易的な対策)
+EMBED_COMMANDS_LOADED = False
+
 async def main():
+    global EMBED_COMMANDS_LOADED
     await act.setup(bot)
-    await EmbedCommands.setup(bot)  # EmbedCommands の setup 関数を呼び出して Cog を追加
+    if not EMBED_COMMANDS_LOADED:
+        try:
+            await EmbedCommands.setup(bot)
+            EMBED_COMMANDS_LOADED = True
+            print("EmbedCommands loaded successfully.")
+        except discord.ClientException as e:
+            print(f"Error loading EmbedCommands: {e}")
+    else:
+        print("EmbedCommands already loaded.")
     await bot.start(os.getenv('DISCORD_TOKEN'))
 
 if __name__ == '__main__':
