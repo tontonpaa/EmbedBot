@@ -7,7 +7,7 @@ class MessageLinkCog(commands.Cog):
         self.bot = bot
 
     @commands.command(name="embed", description="指定されたメッセージリンクの内容を埋め込み表示します。")
-    async def embed_command(self, ctx: commands.Context, link: str):
+    async def embed(self, ctx: commands.Context, link: str):
         if "https://discord.com/channels/" not in link:
             await ctx.send("有効なDiscordメッセージリンクを入力してください。")
             return
