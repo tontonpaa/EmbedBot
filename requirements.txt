@@ -1,2 +1,2 @@
-discord.py>=3.13.2  # discord.ui を使用するため、2.0 以降が必要
+discord.py>=3.0  # discord.ui を使用するため、2.0 以降が必要
 python-dotenv
