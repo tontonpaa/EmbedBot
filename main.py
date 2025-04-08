@@ -15,7 +15,7 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 
 @bot.event
 async def on_ready():
-    activity = discord.CustomActivity(name="毒ユウカから毒抽出中...")
+    activity = discord.CustomActivity(name="私は私、それだけ")
     await bot.change_presence(activity=activity)
     print(f'{bot.user.name} has connected to Discord!')
 
