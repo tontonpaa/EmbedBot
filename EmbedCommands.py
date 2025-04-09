@@ -7,30 +7,27 @@ class MessageLinkCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="embed", description="指定されたメッセージリンクの内容を埋め込み表示します。")
-    @app_commands.describe(link="埋め込みたいメッセージのリンク")
-    async def embed_message(self, interaction: discord.Interaction, link: str):
-        await interaction.response.defer()  # 長い処理が予想されるため、defer
-
+    @commands.command(name="embed", description="指定されたメッセージリンクの内容を埋め込み表示します。")
+    async def embed_command(self, ctx: commands.Context, link: str):
         if "https://discord.com/channels/" not in link:
-            await interaction.followup.send("有効なDiscordメッセージリンクを入力してください。", ephemeral=True)
+            await ctx.send("有効なDiscordメッセージリンクを入力してください。", ephemeral=True)
             return
 
         try:
             link_parts = link.split("https://discord.com/channels/")[1].split("/")
             if len(link_parts) != 3:
-                await interaction.followup.send("無効なメッセージリンク形式です。", ephemeral=True)
+                await ctx.send("無効なメッセージリンク形式です。", ephemeral=True)
                 return
             guild_id, channel_id, message_id = map(int, link_parts)
 
             target_guild = self.bot.get_guild(guild_id)
             if not target_guild:
-                await interaction.followup.send("指定されたサーバーが見つかりません。", ephemeral=True)
+                await ctx.send("指定されたサーバーが見つかりません。", ephemeral=True)
                 return
 
             target_channel = target_guild.get_channel(channel_id)
             if not target_channel or not isinstance(target_channel, discord.abc.Messageable):
-                await interaction.followup.send("指定されたチャンネルが見つかりません。", ephemeral=True)
+                await ctx.send("指定されたチャンネルが見つかりません。", ephemeral=True)
                 return
 
             target_message = await target_channel.fetch_message(message_id)
@@ -57,15 +54,15 @@ class MessageLinkCog(commands.Cog):
             view = View(timeout=None)
             view.add_item(Button(label="元のメッセージへ", style=discord.ButtonStyle.link, url=target_message_link))
 
-            await interaction.followup.send(embed=embed, view=view)
+            await ctx.send(embed=embed, view=view)
 
             # リンク先のメッセージがembedだった場合は、元のembedも表示する
             for original_embed in target_message.embeds:
-                await interaction.followup.send(embed=original_embed, view=view)
+                await ctx.send(embed=original_embed, view=view)
 
         except Exception as e:
             print(f"エラーが発生しました: {e}")
-            await interaction.followup.send("メッセージの埋め込みに失敗しました。", ephemeral=True)
+            await ctx.send("メッセージの埋め込みに失敗しました。", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(MessageLinkCog(bot))
