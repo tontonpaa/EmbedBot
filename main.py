@@ -40,7 +40,7 @@ tree = bot.tree
 message_to_update_east = {}
 message_to_update_west = None
 
-# ChromeDriver 再利用のため、1つのインスタンスで管理
+# ChromeDriver 再利用のための設定
 chrome_options = Options()
 chrome_options.binary_location = "/usr/bin/chromium"
 chrome_options.add_argument("--headless")
@@ -64,8 +64,8 @@ def get_jr_east_region_info(name, url):
             info.append({"路線名": f"[{name}] {line_name}", "運行状況": status, "詳細": detail})
         return info
     except Exception as e:
-        logger.exception(f"JR東日本 - {name} 情報取得失敗: {e}")
-        return [{"路線名": f"[{name}] 取得失敗", "運行状況": "タイムアウトまたはエラー", "詳細": str(e)}]
+        logger.exception(f"JR東日本 - {name} 情報取得失敗")
+        return [{"路線名": f"[{name}] 取得失敗", "運行状況": "エラー", "詳細": str(e)}]
 
 def get_jr_west_info():
     info = []
@@ -86,6 +86,8 @@ def get_jr_west_info():
 @tree.command(name="運行情報", description="JR東日本/西日本の運行情報を表示")
 async def train_info_command(interaction: discord.Interaction):
     await interaction.response.defer()
+    global message_to_update_east, message_to_update_west
+
     try:
         # 東日本
         for name, url in JR_EAST_REGIONS.items():
@@ -94,7 +96,8 @@ async def train_info_command(interaction: discord.Interaction):
             for line in info:
                 embed.add_field(name=f"{line['路線名']}：{line['運行状況']}", value=line['詳細'], inline=False)
             embed.set_footer(text="30分ごとに自動更新されます")
-            message_to_update_east[name] = await interaction.followup.send(embed=embed)
+            message = await interaction.followup.send(embed=embed)
+            message_to_update_east[name] = message
 
         # 西日本
         west_info = get_jr_west_info()
@@ -102,16 +105,18 @@ async def train_info_command(interaction: discord.Interaction):
         for line in west_info:
             embed.add_field(name=f"{line['路線名']}：{line['運行状況']}", value=line['詳細'], inline=False)
         embed.set_footer(text="30分ごとに自動更新されます")
-        global message_to_update_west
         message_to_update_west = await interaction.followup.send(embed=embed)
 
-        update_embed.start()
+        if not update_embed.is_running():
+            update_embed.start()
+
     except Exception as e:
         logger.exception("運行情報コマンドでエラー")
         await interaction.followup.send("運行情報の取得中にエラーが発生しました。")
 
 @tasks.loop(minutes=30)
 async def update_embed():
+    global message_to_update_east, message_to_update_west
     try:
         for name, url in JR_EAST_REGIONS.items():
             info = get_jr_east_region_info(name, url)
