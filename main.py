@@ -8,11 +8,20 @@ from dotenv import load_dotenv
 import os
 from datetime import datetime
 
-# Selenium関連
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+
+options = Options()
+options.binary_location = "/usr/bin/chromium"
+options.add_argument("--headless")
+options.add_argument("--no-sandbox")
+options.add_argument("--disable-dev-shm-usage")
+
+# ChromeDriverを直接指定
+service = Service("/usr/bin/chromedriver")
+driver = webdriver.Chrome(service=service, options=options)
+
 
 # 西日本対応
 from westjr import WestJR
@@ -44,7 +53,6 @@ def get_jr_east_region_info(name, url):
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
     try:
         driver.get(url)
