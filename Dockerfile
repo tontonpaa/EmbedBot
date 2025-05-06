@@ -5,6 +5,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt --no-cache-dir  # --no-cache-dir を追加
+RUN pip install requests
+RUN pip install beautifulsoup4
 
 COPY . .
 
