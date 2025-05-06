@@ -1,2 +1,5 @@
 discord.py>=2.0  # discord.ui を使用するため、2.0 以降が必要
 python-dotenv
+requests
+beautifulsoup4
+westjr
