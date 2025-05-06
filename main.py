@@ -7,13 +7,13 @@ import requests
 from bs4 import BeautifulSoup
 import logging
 from westjr import WestJR
-from westjr.response_types import TrainInfo, Info_LineItem, Info_ExpressItem
+from westjr.response_types import TrainInfo
 
 # ログ設定
-tlogging = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
-# .env から Discord トークンを読み込む
+# .envから Discord トークンを読み込む
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
@@ -22,7 +22,7 @@ if not TOKEN:
 # Discord Bot 設定
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
-base_tree = bot.tree
+tree = bot.tree
 
 # JR東日本 各地域のURL
 JR_EAST_REGIONS = {
@@ -63,7 +63,7 @@ def get_jr_east_region_info(name: str, url: str) -> list[dict]:
             info.append({"路線名": f"[{name}]","運行状況": "なし","詳細": "情報が見つかりませんでした。"})
         return info
     except Exception as e:
-        logging.exception(f"JR東日本 {name} 取得エラー")
+        logger.exception(f"JR東日本 {name} 取得エラー")
         return [{"路線名": f"[{name}] 取得失敗","運行状況": "エラー","詳細": str(e)}]
 
 # --- JR西日本: WestJR API から取得 ---
@@ -72,7 +72,7 @@ def get_jr_west_info() -> list[dict]:
     try:
         jr = WestJR(area="kinki")
         traffic: TrainInfo = jr.get_traffic_info()
-        # 通常の在来線情報
+        # 在来線情報
         for key, li in traffic.lines.items():
             section = f"{li.section.from_ or ''}→{li.section.to or ''}"
             info.append({
@@ -91,11 +91,11 @@ def get_jr_west_info() -> list[dict]:
             info.append({"路線名": "[西日本]","運行状況": "なし","詳細": "問題ありません。"})
         return info
     except Exception as e:
-        logging.exception("JR西日本 取得エラー")
+        logger.exception("JR西日本 取得エラー")
         return [{"路線名": "[西日本] 取得失敗","運行状況": "エラー","詳細": str(e)}]
 
 # --- スラッシュコマンド ---
-@base_tree.command(name="運行情報", description="JR東日本・西日本の運行情報を表示します")
+@tree.command(name="運行情報", description="JR東日本・西日本の運行情報を表示します")
 async def train_info_command(interaction: discord.Interaction):
     await interaction.response.defer()
     global message_to_update_east, message_to_update_west
@@ -116,11 +116,10 @@ async def train_info_command(interaction: discord.Interaction):
             embed.add_field(name=f"{item['路線名']}：{item['運行状況']}", value=item['詳細'], inline=False)
         embed.set_footer(text="30分ごとに自動更新されます")
         message_to_update_west = await interaction.followup.send(embed=embed)
-        # タスク開始
         if not update_embed.is_running():
             update_embed.start()
     except Exception as e:
-        logging.exception("コマンド実行中にエラーが発生しました。")
+        logger.exception("コマンド実行中にエラーが発生しました。")
         await interaction.followup.send("運行情報の取得中にエラーが発生しました。")
 
 # --- 定期更新タスク ---
@@ -136,7 +135,6 @@ async def update_embed():
             embed.set_footer(text="30分ごとに自動更新されます")
             if region in message_to_update_east:
                 await message_to_update_east[region].edit(embed=embed)
-        # 西日本
         west_info = get_jr_west_info()
         embed = discord.Embed(title="🚆 JR西日本運行情報", color=0x4682b4)
         for item in west_info:
@@ -150,7 +148,7 @@ async def update_embed():
 @bot.event
 async def on_ready():
     try:
-        await base_tree.sync()
+        await tree.sync()
         logging.info(f"Bot 起動成功: {bot.user}")
     except Exception as e:
         logging.error(f"スラッシュコマンド同期失敗: {e}")
