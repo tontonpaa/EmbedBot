@@ -4,7 +4,6 @@ import requests
 from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands, tasks
-from sklearn import tree
 from westjr import WestJR
 from westjr.response_types import TrainInfo
 from dotenv import load_dotenv
@@ -71,9 +70,17 @@ def get_jr_west_info() -> list[dict]:
             traffic: TrainInfo = jr.get_traffic_info()
             for route_code, li in traffic.lines.items():
                 route_name = jr.lines.get(route_code, route_code)
-                info.append({"路線名": f"[西日本 {area_name}] {route_name}", "運行状況": li.status, "詳細": li.cause or "詳細なし"})
+                info.append({
+                    "路線名": f"[西日本 {area_name}] {route_name}",
+                    "運行状況": li.status,
+                    "詳細": li.cause or "詳細なし"
+                })
             for _, ei in traffic.express.items():
-                info.append({"路線名": f"[西日本 {area_name} 特急] {ei.name}", "運行状況": ei.status, "詳細": ei.cause or "詳細なし"})
+                info.append({
+                    "路線名": f"[西日本 {area_name} 特急] {ei.name}",
+                    "運行状況": ei.status,
+                    "詳細": ei.cause or "詳細なし"
+                })
         except requests.exceptions.HTTPError as he:
             logger.warning(f"西日本 {area_name} スキップ: {he}")
         except Exception as e:
@@ -83,40 +90,17 @@ def get_jr_west_info() -> list[dict]:
         info = [{"路線名": "[西日本]", "運行状況": "なし", "詳細": "情報が見つかりませんでした。"}]
     return info
 
-# --- スラッシュコマンド ---
-@tree.command(name="運行情報", description="JR東日本・JR西日本の運行情報を表示します。プレフィックスコマンドも同時に定義します。")
-async def slash_train_info(interaction: discord.Interaction):
-    await _send_train_info(interaction)
-
-# --- プレフィックスコマンド (互換) ---
+# コマンド
 @bot.command(name="運行情報")
-async def prefix_train_info(ctx: commands.Context):
-    # Discord Interaction の代わりに Context を渡すユーティリティを用意
-    class DummyInteraction:
-        def __init__(self, ctx):
-            self.ctx = ctx
-        async def response(self):
-            pass
-        async def send(self, **kwargs):
-            return await ctx.send(**kwargs)
-        async def defer(self):
-            return
-        async def followup(self, **kwargs):
-            return await ctx.send(**kwargs)
-    await _send_train_info(DummyInteraction(ctx))
-
-# --- 実際の送信ロジック ---
-async def _send_train_info(interaction):
+async def train_info(ctx: commands.Context):
     global msg_east, msg_west
-    await interaction.defer()
-
     # 東日本
     east = get_jr_east_all_info()
     embed_e = discord.Embed(title="🚆 JR東日本 全路線運行情報", color=0x2E8B57)
     for item in east:
         embed_e.add_field(name=f"{item['路線名']}：{item['運行状況']}", value=item['詳細'], inline=False)
     embed_e.set_footer(text="30分ごとに自動更新されます")
-    msg_east = await interaction.followup.send(embed=embed_e)
+    msg_east = await ctx.send(embed=embed_e)
 
     # 西日本
     west = get_jr_west_info()
@@ -124,11 +108,10 @@ async def _send_train_info(interaction):
     for item in west:
         embed_w.add_field(name=f"{item['路線名']}：{item['運行状況']}", value=item['詳細'], inline=False)
     embed_w.set_footer(text="30分ごとに自動更新されます")
-    msg_west = await interaction.followup.send(embed=embed_w)
+    msg_west = await ctx.send(embed=embed_w)
 
     # 定期更新開始
     if not periodic_update.is_running():
-        periodic_update.start().is_running()
         periodic_update.start()
 
 # 定期更新タスク
