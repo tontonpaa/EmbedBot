@@ -117,4 +117,6 @@ async def on_ready():
     except Exception as e:
         print(f"コマンド同期失敗: {e}")
 
+    # 最後にこれを追加
+if __name__ == "__main__":
     bot.run(TOKEN)
