@@ -1,27 +1,14 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-import requests
 from bs4 import BeautifulSoup
 import asyncio
 from dotenv import load_dotenv
 import os
-from datetime import datetime
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-
-options = Options()
-options.binary_location = "/usr/bin/chromium"
-options.add_argument("--headless")
-options.add_argument("--no-sandbox")
-options.add_argument("--disable-dev-shm-usage")
-
-# ChromeDriverを直接指定
-service = Service("/usr/bin/chromedriver")
-driver = webdriver.Chrome(service=service, options=options)
-
 
 # 西日本対応
 from westjr import WestJR
@@ -47,12 +34,17 @@ JR_EAST_REGIONS = {
 message_to_update_east = {}
 message_to_update_west = None
 
-# --- JR東日本スクレイピング (Selenium使用) ---
+# --- JR東日本スクレイピング（毎回新しいドライバを使う） ---
 def get_jr_east_region_info(name, url):
     options = Options()
+    options.binary_location = "/usr/bin/chromium"
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--remote-debugging-port=9222")
+    
+    service = Service("/usr/bin/chromedriver")
+    driver = webdriver.Chrome(service=service, options=options)
 
     try:
         driver.get(url)
@@ -75,12 +67,12 @@ def get_jr_east_region_info(name, url):
 def get_jr_west_info():
     train_info = []
     try:
-        jr = WestJR()
-        statuses = jr.fetch()
+        jr = WestJR(area="kinki")
+        statuses = jr.get_traffic_info().train_infos
         for s in statuses:
-            name = s.get("name", "路線不明")
-            status = s.get("status", "不明")
-            detail = s.get("text", "詳細なし")
+            name = s.name or "路線不明"
+            status = s.status or "不明"
+            detail = s.text or "詳細なし"
             train_info.append({"路線名": f"[西日本] {name}", "運行状況": status, "詳細": detail})
     except Exception as e:
         train_info.append({"路線名": "[西日本] 全体", "運行状況": "取得失敗", "詳細": str(e)})
