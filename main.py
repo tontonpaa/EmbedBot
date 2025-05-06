@@ -24,13 +24,11 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# JR東日本 各地域のURL
+# JR東日本 各地域のURL (新潟・長野・甲信越を除き、信越を追加)
 JR_EAST_REGIONS = {
     "関東": "https://traininfo.jreast.co.jp/train_info/kanto.aspx",
     "東北": "https://traininfo.jreast.co.jp/train_info/tohoku.aspx",
-    "新潟": "https://traininfo.jreast.co.jp/train_info/niigata.aspx",
-    "長野": "https://traininfo.jreast.co.jp/train_info/nagano.aspx",
-    "甲信越": "https://traininfo.jreast.co.jp/train_info/koshinetsu.aspx",
+    "信越": "https://traininfo.jreast.co.jp/train_info/shinetsu.aspx",
 }
 
 # 自動更新用メッセージ保持
@@ -73,19 +71,19 @@ def get_jr_west_info() -> list[dict]:
         jr = WestJR(area="kinki")
         traffic: TrainInfo = jr.get_traffic_info()
         # 在来線情報
-        for key, li in traffic.lines.items():
-            section = f"{li.section.from_ or ''}→{li.section.to or ''}"
+        for code, li in traffic.lines.items():
+            route_name = jr.lines.get(code, code)  # 路線コードから表示名を取得
             info.append({
-                "路線名": f"[西日本] {section}",
+                "路線名": f"[西日本] {route_name}",
                 "運行状況": li.status,
-                "詳細": li.cause
+                "詳細": li.cause or "詳細なし"
             })
         # 特急情報
-        for key, ei in traffic.express.items():
+        for code, ei in traffic.express.items():
             info.append({
                 "路線名": f"[西日本 特急] {ei.name}",
                 "運行状況": ei.status,
-                "詳細": ei.cause
+                "詳細": ei.cause or "詳細なし"
             })
         if not info:
             info.append({"路線名": "[西日本]","運行状況": "なし","詳細": "問題ありません。"})
@@ -127,6 +125,7 @@ async def train_info_command(interaction: discord.Interaction):
 async def update_embed():
     global message_to_update_east, message_to_update_west
     try:
+        # 東日本 更新
         for region, url in JR_EAST_REGIONS.items():
             info = get_jr_east_region_info(region, url)
             embed = discord.Embed(title=f"🚆 JR東日本（{region}）運行情報", color=0x2e8b57)
@@ -135,6 +134,7 @@ async def update_embed():
             embed.set_footer(text="30分ごとに自動更新されます")
             if region in message_to_update_east:
                 await message_to_update_east[region].edit(embed=embed)
+        # 西日本 更新
         west_info = get_jr_west_info()
         embed = discord.Embed(title="🚆 JR西日本運行情報", color=0x4682b4)
         for item in west_info:
@@ -143,7 +143,7 @@ async def update_embed():
         if message_to_update_west:
             await message_to_update_west.edit(embed=embed)
     except Exception as e:
-        logging.exception("定期更新中にエラーが発生しました。")
+        logger.exception("定期更新中にエラーが発生しました。")
 
 @bot.event
 async def on_ready():
