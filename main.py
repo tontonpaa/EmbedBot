@@ -59,9 +59,14 @@ message_to_update_west = None
 # --- JR東日本スクレイピング (Selenium使用) ---
 def get_jr_east_region_info(name, url):
     options = Options()
+    options.binary_location = "/usr/bin/chromium"
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--remote-debugging-port=9222")
+
+    service = Service("/usr/bin/chromedriver")
+    driver = webdriver.Chrome(service=service, options=options)
 
     try:
         driver.get(url)
