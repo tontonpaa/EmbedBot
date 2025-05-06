@@ -16,7 +16,7 @@ if not TOKEN:
 # 西日本対応
 from westjr import WestJR
 
-intents = discord.Intents.default()
+intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
