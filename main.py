@@ -20,7 +20,7 @@ if not TOKEN:
     raise RuntimeError("Discord トークンが.envに設定されていません。")
 
 # Bot 初期化（message_content intent 必須）
-intents = discord.Intents.default()
+intents = discord.Intents.all()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -28,7 +28,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 # JR東日本 via Yahoo!路線情報 エリアコード
-YAHOO_AREAS = {"関東": 1, "東北": 2, "信越": 4}
+YAHOO_AREAS = {"関東": 4, "東北": 3, "中部": 5}
 
 # JR西日本 API エリアコード→名前
 JR_WEST_AREAS = {"hokuriku": "北陸", "kinki": "近畿", "chugoku": "中国", "shikoku": "四国", "kyushu": "九州"}
