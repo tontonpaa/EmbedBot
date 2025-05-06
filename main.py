@@ -4,6 +4,14 @@ from discord import app_commands
 import requests
 from bs4 import BeautifulSoup
 import asyncio
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # .envファイルを読み込む
+
+TOKEN = os.getenv("DISCORD_TOKEN")
+if not TOKEN:
+    raise ValueError("DISCORD_TOKEN is not set in the environment variables")
 
 # 西日本対応
 from westjr import WestJR
@@ -109,5 +117,4 @@ async def on_ready():
     except Exception as e:
         print(f"コマンド同期失敗: {e}")
 
-# あなたのBotトークンをここに
-bot.run("DISCORD_TOKEN")
+    bot.run(TOKEN)
