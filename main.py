@@ -41,6 +41,10 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
+# 東日本APIエンドポイント修正
+JR_EAST_API_URL = "https://api.jr-east.co.jp/trafficinfo"  # 実際のAPIエンドポイントに修正
+
+# 東日本の地域URL (スクレイピング用)
 JR_EAST_REGIONS = {
     "関東": "https://traininfo.jreast.co.jp/train_info/kanto.aspx",
     "東北": "https://traininfo.jreast.co.jp/train_info/tohoku.aspx",
@@ -87,12 +91,12 @@ def get_jr_west_info():
         # traffic_infoがどのような構造か確認
         logger.info(f"西日本運行情報: {traffic_info}")  # traffic_infoの構造を確認するために出力
 
-        # traffic_infoがリストや辞書として扱える場合、そのデータを取り出す
+        # traffic_infoがTrainInfo形式の場合、そのデータを取り出す
         if isinstance(traffic_info, TrainInfo):
-            for status in traffic_info.data:  # .dataがリストの場合
-                name = status.get("name", "路線不明")
-                status_text = status.get("status", "不明")
-                detail = status.get("text", "詳細なし")
+            for status in traffic_info.lines.values():  # .linesを使用
+                name = status.section.from_ + " - " + status.section.to
+                status_text = status.status
+                detail = status.cause
                 train_info.append({"路線名": f"[西日本] {name}", "運行状況": status_text, "詳細": detail})
         else:
             train_info.append({"路線名": "[西日本] 全体", "運行状況": "データ形式不明", "詳細": str(traffic_info)})
