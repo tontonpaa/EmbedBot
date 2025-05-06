@@ -3,3 +3,5 @@ python-dotenv
 requests
 beautifulsoup4
 westjr
+selenium
+webdriver-manager

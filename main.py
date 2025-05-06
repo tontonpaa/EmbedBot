@@ -8,20 +8,25 @@ from dotenv import load_dotenv
 import os
 from datetime import datetime
 
-load_dotenv()  # .envファイルを読み込む
+# Selenium関連
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+
+# 西日本対応
+from westjr import WestJR
+
+load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise ValueError("DISCORD_TOKEN is not set in the environment variables")
 
-# 西日本対応
-from westjr import WestJR
-
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# JR東日本の地域別URL
 JR_EAST_REGIONS = {
     "関東": "https://traininfo.jreast.co.jp/train_info/kanto.aspx",
     "東北": "https://traininfo.jreast.co.jp/train_info/tohoku.aspx",
@@ -30,20 +35,21 @@ JR_EAST_REGIONS = {
     "甲信越": "https://traininfo.jreast.co.jp/train_info/koshinetsu.aspx",
 }
 
-# --- 更新対象をまとめるための変数 --- 
-message_to_update_east = {}  # 東日本各地域の更新対象
-message_to_update_west = None  # 西日本全体の更新対象
+message_to_update_east = {}
+message_to_update_west = None
 
-# --- JR東日本スクレイピング --- 
+# --- JR東日本スクレイピング (Selenium使用) ---
 def get_jr_east_region_info(name, url):
-    headers = {"User-Agent": "Mozilla/5.0"}
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
     try:
-        response = requests.get(url, headers=headers, timeout=5)
-        response.encoding = 'utf-8'
-        if response.status_code != 200:
-            return [{"路線名": f"[{name}]取得失敗", "運行状況": f"ステータス: {response.status_code}", "詳細": ""}]
-        
-        soup = BeautifulSoup(response.text, "html.parser")
+        driver.get(url)
+        html = driver.page_source
+        soup = BeautifulSoup(html, "html.parser")
         lines = soup.select(".lineDetail")
         info = []
         for line in lines:
@@ -54,25 +60,25 @@ def get_jr_east_region_info(name, url):
         return info
     except Exception as e:
         return [{"路線名": f"[{name}]取得失敗", "運行状況": "タイムアウトまたはエラー", "詳細": str(e)}]
+    finally:
+        driver.quit()
 
-# --- JR西日本スクレイピング ---
+# --- JR西日本 ---
 def get_jr_west_info():
-    areas = ["hokuriku", "kinki", "chugoku"]
     train_info = []
-    for area in areas:
-        try:
-            jr = WestJR(area=area)
-            statuses = jr.get_statuses()
-            for s in statuses:
-                name = s.get("name", "路線不明")
-                status = s.get("status", "不明")
-                detail = s.get("detail", "詳細なし")
-                train_info.append({"路線名": f"[西日本] {name}", "運行状況": status, "詳細": detail})
-        except Exception as e:
-            train_info.append({"路線名": f"[西日本] {area}", "運行状況": "取得失敗", "詳細": str(e)})
+    try:
+        jr = WestJR()
+        statuses = jr.fetch()
+        for s in statuses:
+            name = s.get("name", "路線不明")
+            status = s.get("status", "不明")
+            detail = s.get("text", "詳細なし")
+            train_info.append({"路線名": f"[西日本] {name}", "運行状況": status, "詳細": detail})
+    except Exception as e:
+        train_info.append({"路線名": "[西日本] 全体", "運行状況": "取得失敗", "詳細": str(e)})
     return train_info
 
-# --- コマンド --- 
+# --- コマンド ---
 @tree.command(name="運行情報", description="JR全体の運行情報（関東含む）を表示します")
 async def train_info_command(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -88,7 +94,7 @@ async def train_info_command(interaction: discord.Interaction):
                 inline=False
             )
         embed.set_footer(text="30分ごとに自動更新されます")
-        message_to_update_east[name] = await interaction.followup.send(embed=embed)  # 各地域ごとの更新対象を格納
+        message_to_update_east[name] = await interaction.followup.send(embed=embed)
     
     # 西日本：1つのembedにまとめて送信
     west_info = get_jr_west_info()
@@ -100,15 +106,14 @@ async def train_info_command(interaction: discord.Interaction):
             inline=False
         )
     embed.set_footer(text="30分ごとに自動更新されます")
-    message_to_update_west = await interaction.followup.send(embed=embed)  # 西日本の更新対象を格納
+    global message_to_update_west
+    message_to_update_west = await interaction.followup.send(embed=embed)
 
-    update_embed.start()  # 自動更新タスクを開始
+    update_embed.start()
 
-
-# --- 自動更新タスク --- 
+# --- 自動更新タスク ---
 @tasks.loop(minutes=30)
 async def update_embed():
-    # 東日本の更新
     for name, url in JR_EAST_REGIONS.items():
         info = get_jr_east_region_info(name, url)
         embed = discord.Embed(title=f"🚆 JR東日本（{name}）運行情報", color=0x2e8b57)
@@ -119,11 +124,9 @@ async def update_embed():
                 inline=False
             )
         embed.set_footer(text="30分ごとに自動更新されます")
-        # メッセージを更新
         if name in message_to_update_east:
             await message_to_update_east[name].edit(embed=embed)
 
-    # 西日本の更新
     west_info = get_jr_west_info()
     embed = discord.Embed(title="🚆 JR西日本運行情報", color=0x4682b4)
     for line in west_info:
@@ -133,7 +136,6 @@ async def update_embed():
             inline=False
         )
     embed.set_footer(text="30分ごとに自動更新されます")
-    # 西日本のメッセージを更新
     if message_to_update_west:
         await message_to_update_west.edit(embed=embed)
 
@@ -146,6 +148,5 @@ async def on_ready():
     except Exception as e:
         print(f"コマンド同期失敗: {e}")
 
-    # 最後にこれを追加
 if __name__ == "__main__":
     bot.run(TOKEN)
