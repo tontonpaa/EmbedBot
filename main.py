@@ -1,14 +1,30 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
+import requests
 from bs4 import BeautifulSoup
 import asyncio
 from dotenv import load_dotenv
 import os
+from datetime import datetime
+from westjr.response_types import TrainInfo  # ここでTrainInfoをインポートする
+
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+
+options = Options()
+options.binary_location = "/usr/bin/chromium"
+options.add_argument("--headless")
+options.add_argument("--no-sandbox")
+options.add_argument("--disable-dev-shm-usage")
+
+# ChromeDriverを直接指定
+service = Service("/usr/bin/chromedriver")
+options.add_argument("--remote-debugging-port=9222")
+driver = webdriver.Chrome(service=service, options=options)
+
 
 # 西日本対応
 from westjr import WestJR
@@ -34,17 +50,12 @@ JR_EAST_REGIONS = {
 message_to_update_east = {}
 message_to_update_west = None
 
-# --- JR東日本スクレイピング（毎回新しいドライバを使う） ---
+# --- JR東日本スクレイピング (Selenium使用) ---
 def get_jr_east_region_info(name, url):
     options = Options()
-    options.binary_location = "/usr/bin/chromium"
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--remote-debugging-port=9222")
-    
-    service = Service("/usr/bin/chromedriver")
-    driver = webdriver.Chrome(service=service, options=options)
 
     try:
         driver.get(url)
@@ -63,17 +74,26 @@ def get_jr_east_region_info(name, url):
     finally:
         driver.quit()
 
-# --- JR西日本 ---
+# --- JR西日本 --- 修正
 def get_jr_west_info():
     train_info = []
     try:
-        jr = WestJR(area="kinki")
-        statuses = jr.get_traffic_info().train_infos
-        for s in statuses:
-            name = s.name or "路線不明"
-            status = s.status or "不明"
-            detail = s.text or "詳細なし"
-            train_info.append({"路線名": f"[西日本] {name}", "運行状況": status, "詳細": detail})
+        jr = WestJR(area="kinki")  # エリアを指定
+        traffic_info = jr.get_traffic_info()  # 運行情報を取得
+        
+        # traffic_infoがどのような構造か確認
+        print(traffic_info)  # traffic_infoの構造を確認するために出力
+
+        # traffic_infoがリストや辞書として扱える場合、そのデータを取り出す
+        if isinstance(traffic_info, TrainInfo):
+            # TrainInfo内の必要なデータを取り出す
+            for status in traffic_info.data:  # .dataがリストの場合
+                name = status.get("name", "路線不明")
+                status_text = status.get("status", "不明")
+                detail = status.get("text", "詳細なし")
+                train_info.append({"路線名": f"[西日本] {name}", "運行状況": status_text, "詳細": detail})
+        else:
+            train_info.append({"路線名": "[西日本] 全体", "運行状況": "データ形式不明", "詳細": str(traffic_info)})
     except Exception as e:
         train_info.append({"路線名": "[西日本] 全体", "運行状況": "取得失敗", "詳細": str(e)})
     return train_info
