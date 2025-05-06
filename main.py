@@ -1,5 +1,6 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import tasks
+from discord import app_commands
 import os
 from dotenv import load_dotenv
 import requests
@@ -20,13 +21,17 @@ if not TOKEN:
 
 # Discord Bot 設定
 intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
+
+# HTTP ヘッダー
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 # JR東日本 各地域 URL
 JR_EAST_REGIONS = {
     "関東": "https://traininfo.jreast.co.jp/train_info/kanto.aspx",
     "東北": "https://traininfo.jreast.co.jp/train_info/tohoku.aspx",
-    "信越": "https://traininfo.jreast.co.jp/train_info/shinetsu.aspx",
+    "信越": "https://traininfo.jreast.co.jp/train_info/koshinetsu.aspx",
 }
 
 # JR西日本 API エリアコード→日本語名
@@ -39,14 +44,11 @@ JR_WEST_AREAS = {
 }
 
 # 自動更新用メッセージ保持
-global msg_east, msg_west
-msg_east = {}
-msg_west = None
-
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+message_to_update_east = {}
+message_to_update_west = None
 
 # --- JR東日本: requests + BeautifulSoup ---
-def get_jr_east_info(region: str, url: str):
+def get_jr_east_info(region: str, url: str) -> list[dict]:
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         resp.encoding = 'utf-8'
@@ -67,7 +69,7 @@ def get_jr_east_info(region: str, url: str):
         return [{'路線名': f'[{region}] 取得失敗', '運行状況': 'エラー', '詳細': str(e)}]
 
 # --- JR西日本: WestJR API ---
-def get_jr_west_info():
+def get_jr_west_info() -> list[dict]:
     info = []
     for code, area in JR_WEST_AREAS.items():
         try:
@@ -89,48 +91,52 @@ def get_jr_west_info():
         info = [{'路線名': '[西日本]', '運行状況': 'なし', '詳細': '情報が見つかりませんでした。'}]
     return info
 
-# --- /運行情報 コマンド ---
-@bot.command(name='運行情報')
-async def train_info(ctx):
+# --- スラッシュコマンド ---
+@tree.command(name="運行情報", description="JR東日本・西日本の運行情報を表示します")
+async def run_info(interaction: discord.Interaction):
+    await interaction.response.defer()
+    global message_to_update_east, message_to_update_west
     # 東日本
     for region, url in JR_EAST_REGIONS.items():
         info = get_jr_east_info(region, url)
-        embed = discord.Embed(title=f'🚆 JR東日本（{region}）運行情報', color=0x2e8b57)
+        embed = discord.Embed(title=f"🚆 JR東日本（{region}）運行情報", color=0x2e8b57)
         for item in info:
             embed.add_field(name=f"{item['路線名']}：{item['運行状況']}", value=item['詳細'], inline=False)
         embed.set_footer(text='30分ごとに自動更新されます')
-        msg = await ctx.send(embed=embed)
-        msg_east[region] = msg
+        msg = await interaction.followup.send(embed=embed)
+        message_to_update_east[region] = msg
     # 西日本
-    west_info = get_jr_west_info()
-    embed = discord.Embed(title='🚆 JR西日本運行情報', color=0x4682b4)
-    for item in west_info:
+    west = get_jr_west_info()
+    embed = discord.Embed(title="🚆 JR西日本運行情報", color=0x4682b4)
+    for item in west:
         embed.add_field(name=f"{item['路線名']}：{item['運行状況']}", value=item['詳細'], inline=False)
     embed.set_footer(text='30分ごとに自動更新されます')
-    global msg_west
-    msg_west = await ctx.send(embed=embed)
-    # 定期更新タスク開始
+    message_to_update_west = await interaction.followup.send(embed=embed)
     if not update_loop.is_running():
         update_loop.start()
 
-# --- 定期更新 ---
+# --- 自動更新タスク ---
 @tasks.loop(minutes=30)
 async def update_loop():
-    # 東日本
     for region, url in JR_EAST_REGIONS.items():
         info = get_jr_east_info(region, url)
-        embed = discord.Embed(title=f'🚆 JR東日本（{region}）運行情報', color=0x2e8b57)
+        embed = discord.Embed(title=f"🚆 JR東日本（{region}）運行情報", color=0x2e8b57)
         for item in info:
             embed.add_field(name=f"{item['路線名']}：{item['運行状況']}", value=item['詳細'], inline=False)
         embed.set_footer(text='30分ごとに自動更新されます')
-        await msg_east[region].edit(embed=embed)
-    # 西日本
-    west_info = get_jr_west_info()
-    embed = discord.Embed(title='🚆 JR西日本運行情報', color=0x4682b4)
-    for item in west_info:
+        await message_to_update_east[region].edit(embed=embed)
+    west = get_jr_west_info()
+    embed = discord.Embed(title="🚆 JR西日本運行情報", color=0x4682b4)
+    for item in west:
         embed.add_field(name=f"{item['路線名']}：{item['運行状況']}", value=item['詳細'], inline=False)
     embed.set_footer(text='30分ごとに自動更新されます')
-    await msg_west.edit(embed=embed)
+    await message_to_update_west.edit(embed=embed)
 
-# Bot起動
-bot.run(TOKEN)
+# 起動時
+@bot.event
+async def on_ready():
+    await tree.sync()
+    logger.info(f"Bot 起動成功: {bot.user}")
+
+if __name__ == '__main__':
+    bot.run(TOKEN)
