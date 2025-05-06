@@ -3,7 +3,7 @@ import logging
 import requests
 from bs4 import BeautifulSoup
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from westjr import WestJR
 from westjr.response_types import TrainInfo
 from dotenv import load_dotenv
@@ -18,8 +18,9 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("Discord トークンが.envに設定されていません。")
 
-# Bot 初期化
-intents = discord.Intents.default()
+# Bot 初期化（MESSAGE_CONTENT intent を有効に）
+intents = discord.Intents.all()
+intents.message_content = True  # プレフィックスコマンドを使うには必須
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # HTTPヘッダー
@@ -42,7 +43,7 @@ JR_WEST_AREAS = {
 }
 
 # --- JR東日本情報取得 ---
-def get_jr_east_region_info(region: str, url: str):
+def get_jr_east_region_info(region: str, url: str) -> list[dict]:
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         if resp.status_code == 403:
@@ -64,36 +65,22 @@ def get_jr_east_region_info(region: str, url: str):
         return [{"路線名": f"[{region}] 取得失敗", "運行状況": "エラー", "詳細": str(e)}]
 
 # --- JR西日本情報取得 ---
-def get_jr_west_info():
+def get_jr_west_info() -> list[dict]:
     info = []
     for code, area_name in JR_WEST_AREAS.items():
         try:
             jr = WestJR(area=code)
             traffic: TrainInfo = jr.get_traffic_info()
-            # 在来線
             for route_code, li in traffic.lines.items():
                 route_name = jr.lines.get(route_code, route_code)
-                info.append({
-                    "路線名": f"[西日本 {area_name}] {route_name}",
-                    "運行状況": li.status,
-                    "詳細": li.cause or '詳細なし'
-                })
-            # 特急
+                info.append({"路線名": f"[西日本 {area_name}] {route_name}", "運行状況": li.status, "詳細": li.cause or '詳細なし'})
             for _, ei in traffic.express.items():
-                info.append({
-                    "路線名": f"[西日本 {area_name} 特急] {ei.name}",
-                    "運行状況": ei.status,
-                    "詳細": ei.cause or '詳細なし'
-                })
+                info.append({"路線名": f"[西日本 {area_name} 特急] {ei.name}", "運行状況": ei.status, "詳細": ei.cause or '詳細なし'})
         except requests.exceptions.HTTPError as he:
             logger.warning(f"西日本 {area_name} API未対応: {he}")
         except Exception as e:
             logger.exception(f"JR西日本 {area_name} 取得失敗")
-            info.append({
-                "路線名": f"[西日本 {area_name}] 取得失敗",
-                "運行状況": "エラー",
-                "詳細": str(e)
-            })
+            info.append({"路線名": f"[西日本 {area_name}] 取得失敗", "運行状況": "エラー", "詳細": str(e)})
     if not info:
         info = [{"路線名": "[西日本]", "運行状況": "なし", "詳細": "情報が見つかりませんでした。"}]
     return info
@@ -106,11 +93,7 @@ async def train_info(ctx: commands.Context):
         info = get_jr_east_region_info(region, url)
         embed = discord.Embed(title=f"🚆 JR東日本（{region}）運行情報", color=0x2e8b57)
         for item in info:
-            embed.add_field(
-                name=f"{item['路線名']}：{item['運行状況']}",
-                value=item['詳細'],
-                inline=False
-            )
+            embed.add_field(name=f"{item['路線名']}：{item['運行状況']}", value=item['詳細'], inline=False)
         embed.set_footer(text="30分ごとに自動更新されます")
         await ctx.send(embed=embed)
 
@@ -118,11 +101,7 @@ async def train_info(ctx: commands.Context):
     west_info = get_jr_west_info()
     embed = discord.Embed(title="🚆 JR西日本 運行情報", color=0x4682b4)
     for item in west_info:
-        embed.add_field(
-            name=f"{item['路線名']}：{item['運行状況']}",
-            value=item['詳細'],
-            inline=False
-        )
+        embed.add_field(name=f"{item['路線名']}：{item['運行状況']}", value=item['詳細'], inline=False)
     embed.set_footer(text="30分ごとに自動更新されます")
     await ctx.send(embed=embed)
 
