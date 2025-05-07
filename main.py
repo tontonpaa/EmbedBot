@@ -86,25 +86,27 @@ REQUEST_CHANNEL = None
 # ===== Selenium設定 =====
 def create_driver():
     options = Options()
-    options.add_argument("--headless")
+    options.add_argument("--headless=new")  # 新しいheadlessモード（より安定）
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    # UA更新: 最新のChromeバージョンを使用
+    options.add_argument("--remote-debugging-port=9222")  # 追加
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
-    # メモリリーク防止策
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-logging")
     options.add_argument("--disable-in-process-stack-traces")
-    
-    # 修正: ウェブドライバの新しいバージョンでの安定性向上
-    driver = webdriver.Chrome(options=options)
-    driver.set_page_load_timeout(45)  # タイムアウト延長
-    return driver
+
+    try:
+        driver = webdriver.Chrome(options=options)
+        driver.set_page_load_timeout(45)
+        return driver
+    except WebDriverException as e:
+        logger.error(f"ChromeDriver起動エラー: {e}")
+        raise
 
 # ===== 補助関数 =====
 def should_include(status: str, detail: str) -> bool:
