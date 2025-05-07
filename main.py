@@ -1,9 +1,8 @@
 import os
-import re
 import logging
-from datetime import datetime
 import time
 import requests
+from datetime import datetime
 from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands, tasks
@@ -24,9 +23,13 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # JR東日本 via Yahoo!路線情報 エリアコード
-YAHOO_AREAS = {"関東": 4, "東北": 3, "中部": 5}
+YAHOO_AREAS = {
+    "関東": 4,
+    "東北": 3,
+    "中部": 5
+}
 
-# JR西日本 路線情報（省略せずに全エリア定義してください）
+# JR西日本 路線情報
 JR_WEST_LINES = {
     "hokuriku": {
         "name": "北陸",
@@ -39,21 +42,51 @@ JR_WEST_LINES = {
     "kinki": {
         "name": "近畿",
         "lines": [
-            {"id": "kobesanyo","name": "JR神戸線・山陽本線"},
-            {"id": "kyoto",    "name": "JR京都線・東海道本線"},
-            {"id": "osaka",    "name": "大阪環状線"},
-            {"id": "yamatoji", "name": "大和路線・関西本線"},
-            {"id": "hanwahagoromo", "name": "阪和線・羽衣線"},
-            {"id": "kansaiairport", "name": "関西空港線"},
-            {"id": "tozai",    "name": "JR東西線"},
-            {"id": "takarazuka","name": "JR宝塚線・福知山線"},
-            {"id": "sakurai",  "name": "桜井線(万葉まほろば線)"},
-            {"id": "nara",     "name": "奈良線"},
-            {"id": "sagano",   "name": "嵯峨野線・山陰本線"},
-            {"id": "kinokuni", "name": "きのくに線・紀勢本線"},
+            {"id": "kobesanyo",      "name": "JR神戸線・山陽本線"},
+            {"id": "kyoto",          "name": "JR京都線・東海道本線"},
+            {"id": "osaka",          "name": "大阪環状線"},
+            {"id": "yamatoji",       "name": "大和路線・関西本線"},
+            {"id": "hanwahagoromo",  "name": "阪和線・羽衣線"},
+            {"id": "kansaiairport",  "name": "関西空港線"},
+            {"id": "tozai",          "name": "JR東西線"},
+            {"id": "takarazuka",     "name": "JR宝塚線・福知山線"},
+            {"id": "sakurai",        "name": "桜井線(万葉まほろば線)"},
+            {"id": "nara",           "name": "奈良線"},
+            {"id": "sagano",         "name": "嵯峨野線・山陰本線"},
+            {"id": "kinokuni",       "name": "きのくに線・紀勢本線"},
         ]
     },
-    # ... 他エリアも同様に定義 ...
+    "chugoku": {
+        "name": "中国",
+        "lines": [
+            {"id": "sanin", "name": "山陰本線"},
+            {"id": "hakubi","name": "伯備線"},
+            {"id": "kabe",  "name": "可部線"},
+            {"id": "geibi", "name": "芸備線"},
+            {"id": "sanyo", "name": "山陽本線"},
+        ]
+    },
+    "shikoku": {
+        "name": "四国",
+        "lines": [
+            {"id": "yosan",     "name": "予讃線"},
+            {"id": "dosan",     "name": "土讃線"},
+            {"id": "kotoku",    "name": "高徳線"},
+            {"id": "naruto",    "name": "鳴門線"},
+            {"id": "tokushima", "name": "徳島線"},
+        ]
+    },
+    "kyushu": {
+        "name": "九州",
+        "lines": [
+            {"id": "kagoshima","name": "鹿児島本線"},
+            {"id": "nippo",    "name": "日豊本線"},
+            {"id": "chikuhi",  "name": "筑肥線"},
+            {"id": "sasebo",   "name": "佐世保線"},
+            {"id": "nagasaki", "name": "長崎本線"},
+            {"id": "hisatsu",  "name": "肥薩線"},
+        ]
+    }
 }
 
 DISRUPTION_KEYWORDS = ["運休", "運転見合わせ", "遅延"]
@@ -67,7 +100,7 @@ def should_include(status: str, detail: str) -> bool:
     normal = ["平常", "通常", "問題なく", "通常通り"]
     return not any(p in status for p in normal) or bool(detail and detail.strip())
 
-# ===== JR東日本情報取得（HTML解析版） =====
+# ===== JR東日本情報取得（HTML版） =====
 def get_jr_east_filtered(region: str, area_code: int) -> list[dict]:
     url = f"https://transit.yahoo.co.jp/diainfo/area/{area_code}"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -79,42 +112,42 @@ def get_jr_east_filtered(region: str, area_code: int) -> list[dict]:
         return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": str(e)}]
 
     soup = BeautifulSoup(r.text, "html.parser")
-
-    # <h3>JR東日本</h3> を見つけ、その直後の <table> をパース
-    header = soup.find("h3", string=re.compile(r"JR東日本"))
-    if not header:
-        logger.error(f"JR東日本 {region} セクション見つからず")
-        return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": "セクション未検出"}]
-
-    table = header.find_next_sibling("table")
-    if not table:
-        logger.error(f"JR東日本 {region} テーブル未検出")
-        return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": "テーブル未検出"}]
-
     items = []
-    rows = table.find_all("tr")
-    for tr in rows[1:]:  # ヘッダー行をスキップ
-        cols = tr.find_all("td")
-        if len(cols) < 3:
+
+    # trouble テーブルを持つ div.elmTblLstLine.trouble をパース
+    for div in soup.select("div.elmTblLstLine.trouble"):
+        tbl = div.find("table")
+        if not tbl:
             continue
-        name   = cols[0].get_text(strip=True)
-        status = cols[1].get_text(strip=True)
-        detail = cols[2].get_text(strip=True)
-        if name and status and should_include(status, detail):
-            items.append({"路線名": name, "運行状況": status, "詳細": detail})
+        for tr in tbl.select("tbody > tr")[1:]:  # ヘッダー行をスキップ
+            cols = tr.find_all("td")
+            if len(cols) < 3:
+                continue
+            name   = cols[0].get_text(strip=True)
+            status = cols[1].get_text(strip=True)
+            detail = cols[2].get_text(strip=True)
+            if name and status and should_include(status, detail):
+                items.append({
+                    "路線名": name,
+                    "運行状況": status,
+                    "詳細": detail
+                })
+
     if not items:
         return [{"路線名": f"{region}全線", "運行状況": "平常運転", "詳細": ""}]
     return items
 
-# ===== JR西日本情報取得（従来どおり） =====
+# ===== JR西日本情報取得 =====
 def get_jr_west_filtered(area_code: str) -> list[dict]:
     area = JR_WEST_LINES.get(area_code)
     if not area:
         return [{"路線名": f"不明エリア {area_code}", "運行状況": "エラー", "詳細": "無効なエリアコード"}]
 
-    items, has_data = [], False
+    items = []
+    has_data = False
     for ln in area["lines"]:
         lid, lname = ln["id"], ln["name"]
+        last_err = None
         for attempt in range(3):
             try:
                 resp = requests.get(
@@ -137,8 +170,8 @@ def get_jr_west_filtered(area_code: str) -> list[dict]:
                 last_err = e
                 time.sleep(1)
         else:
-            # 3回失敗
             items.append({"路線名": lname, "運行状況": "エラー", "詳細": str(last_err)})
+
     if not items and has_data:
         return [{"路線名": f"{area['name']}全線", "運行状況": "平常運転", "詳細": ""}]
     if not has_data:
@@ -186,7 +219,7 @@ async def update_train_info():
         return
     ch = REQUEST_CHANNEL
 
-    # 東日本
+    # 東日本更新
     for reg, code in YAHOO_AREAS.items():
         try:
             data = get_jr_east_filtered(reg, code)
@@ -204,7 +237,7 @@ async def update_train_info():
             logger.exception(f"自動更新 JR東日本 {reg} エラー")
             await send_error_report(ch, f"JR東日本 {reg} 自動更新中にエラー", e)
 
-    # 西日本
+    # 西日本更新
     for area in JR_WEST_LINES.keys():
         try:
             data = get_jr_west_filtered(area)
@@ -227,12 +260,14 @@ async def update_train_info():
 async def train_info(ctx: commands.Context):
     global REQUEST_CHANNEL
     REQUEST_CHANNEL = ctx.channel
+
     # 東日本
     for reg, code in YAHOO_AREAS.items():
         data = get_jr_east_filtered(reg, code)
         emb  = create_east_embed(reg, data)
         msg  = await ctx.send(embed=emb)
         train_messages["east"][reg] = msg
+
     # 西日本
     for area in JR_WEST_LINES.keys():
         data = get_jr_west_filtered(area)
