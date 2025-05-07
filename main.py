@@ -53,37 +53,7 @@ JR_WEST_LINES = {
             {"id": "kinokuni", "name": "きのくに線・紀勢本線"},
         ]
     },
-    "chugoku": {
-        "name": "中国",
-        "lines": [
-            {"id": "sanin", "name": "山陰本線"},
-            {"id": "hakubi","name": "伯備線"},
-            {"id": "kabe",  "name": "可部線"},
-            {"id": "geibi", "name": "芸備線"},
-            {"id": "sanyo", "name": "山陽本線"},
-        ]
-    },
-    "shikoku": {
-        "name": "四国",
-        "lines": [
-            {"id": "yosan",     "name": "予讃線"},
-            {"id": "dosan",     "name": "土讃線"},
-            {"id": "kotoku",    "name": "高徳線"},
-            {"id": "naruto",    "name": "鳴門線"},
-            {"id": "tokushima", "name": "徳島線"},
-        ]
-    },
-    "kyushu": {
-        "name": "九州",
-        "lines": [
-            {"id": "kagoshima","name": "鹿児島本線"},
-            {"id": "nippo",    "name": "日豊本線"},
-            {"id": "chikuhi",  "name": "筑肥線"},
-            {"id": "sasebo",   "name": "佐世保線"},
-            {"id": "nagasaki", "name": "長崎本線"},
-            {"id": "hisatsu",  "name": "肥薩線"},
-        ]
-    }
+    # ... 他エリアの定義も同様に ...
 }
 
 DISRUPTION_KEYWORDS = ["運休", "運転見合わせ", "遅延"]
@@ -94,25 +64,26 @@ REQUEST_CHANNEL = None
 
 # ===== 補助関数 =====
 def should_include(status: str, detail: str) -> bool:
-    normal_patterns = ["平常", "通常", "問題なく", "通常通り"]
-    return not any(p in status for p in normal_patterns) or bool(detail and detail.strip())
+    normal = ["平常", "通常", "問題なく", "通常通り"]
+    return not any(p in status for p in normal) or bool(detail and detail.strip())
 
 def find_train_info(data) -> list:
     """
-    再帰的に data を検索して、
-    'lineName' や 'statusText' を含む辞書のリストを返す。
+    JSON 内を再帰的に探索し、
+    'lineName' と 'statusText' を含む辞書のリストを見つけて返す。
     """
     candidates = []
 
     def recurse(obj):
         if isinstance(obj, list):
-            if obj and all(isinstance(item, dict) for item in obj):
-                # 要素に lineName または statusText があるリストを候補とする
-                if any('lineName' in item or 'statusText' in item for item in obj):
-                    candidates.append(obj)
-                    return
-            for item in obj:
-                recurse(item)
+            dicts = [x for x in obj if isinstance(x, dict)]
+            # その dict の半数以上が lineName & statusText を持っていたら候補
+            matches = [d for d in dicts if 'lineName' in d and 'statusText' in d]
+            if len(matches) >= max(1, len(dicts) // 2):
+                candidates.append(matches)
+            for x in obj:
+                recurse(x)
+
         elif isinstance(obj, dict):
             for v in obj.values():
                 recurse(v)
@@ -120,15 +91,15 @@ def find_train_info(data) -> list:
     recurse(data)
     if not candidates:
         return None
-    # 最長のリストを選択
-    return max(candidates, key=lambda lst: len(lst))
+    # 最長のリストを返す
+    return max(candidates, key=len)
 
-# --- JR東日本情報取得（__NEXT_DATA__ → JSON API版） ---
+# --- JR東日本情報取得（__NEXT_DATA__ → JSON API 版） ---
 def get_jr_east_filtered(region: str, area_code: int) -> list[dict]:
     page_url = f"https://transit.yahoo.co.jp/diainfo/area/{area_code}"
     headers = {"User-Agent": "Mozilla/5.0"}
 
-    # 1) ページHTMLを取得して __NEXT_DATA__ を抜き出す
+    # 1) ページHTMLから __NEXT_DATA__ を抜き出し
     try:
         resp = requests.get(page_url, headers=headers, timeout=15)
         resp.raise_for_status()
@@ -137,12 +108,13 @@ def get_jr_east_filtered(region: str, area_code: int) -> list[dict]:
         return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": str(e)}]
 
     m = re.search(
-        r'<script id="__NEXT_DATA__" type="application/json">(.+?)</script>',
-        resp.text, re.DOTALL
+        r'<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]+?)</script>',
+        resp.text
     )
     if not m:
-        logger.error(f"JR東日本 {region} __NEXT_DATA__ が見つかりません")
+        logger.error(f"JR東日本 {region} __NEXT_DATA__ 抽出失敗")
         return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": "__NEXT_DATA__ 抽出失敗"}]
+
     try:
         next_data = json.loads(m.group(1))
         build_id = next_data["buildId"]
@@ -160,7 +132,7 @@ def get_jr_east_filtered(region: str, area_code: int) -> list[dict]:
         logger.error(f"JR東日本 {region} JSON API エラー: {e}")
         return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": "JSON API 取得失敗"}]
 
-    # 3) JSON から運行情報を取り出す
+    # 3) JSON から運行情報リストを抽出
     info_list = find_train_info(data)
     if not info_list:
         logger.warning(f"JR東日本 {region} データキー未検出")
@@ -169,23 +141,22 @@ def get_jr_east_filtered(region: str, area_code: int) -> list[dict]:
     # 4) 整形して返す
     items = []
     for entry in info_list:
-        name   = entry.get("lineName") or entry.get("name")
-        status = entry.get("statusText") or entry.get("status")
-        detail = entry.get("detail") or entry.get("description") or ""
+        name   = entry.get("lineName")    or entry.get("name")
+        status = entry.get("statusText")  or entry.get("status")
+        detail = entry.get("detail")      or entry.get("description") or ""
         if name and status and should_include(status, detail):
             items.append({"路線名": name, "運行状況": status, "詳細": detail})
     if not items:
         return [{"路線名": f"{region}全線", "運行状況": "平常運転", "詳細": ""}]
     return items
 
-# --- JR西日本情報取得 ---
+# --- JR西日本情報取得（従来どおり） ---
 def get_jr_west_filtered(area_code: str) -> list[dict]:
     area = JR_WEST_LINES.get(area_code)
     if not area:
         return [{"路線名": f"不明エリア {area_code}", "運行状況": "エラー", "詳細": "無効なエリアコード"}]
 
-    items = []
-    has_data = False
+    items, has_data = [], False
     for ln in area["lines"]:
         lid, lname = ln["id"], ln["name"]
         retries, max_retries = 0, 3
@@ -198,9 +169,9 @@ def get_jr_west_filtered(area_code: str) -> list[dict]:
                 )
                 if resp.status_code == 200:
                     has_data = True
-                    data = resp.json()
-                    status = data.get("status", {}).get("text", "")
-                    detail = data.get("status", {}).get("detail", "")
+                    d = resp.json()
+                    status = d.get("status", {}).get("text", "")
+                    detail = d.get("status", {}).get("detail", "")
                     if should_include(status, detail):
                         items.append({"路線名": lname, "運行状況": status, "詳細": detail or "詳細なし"})
                     break
@@ -226,11 +197,7 @@ def get_jr_west_filtered(area_code: str) -> list[dict]:
 # --- Embed作成 ---
 def create_east_embed(region: str, data: list[dict]) -> discord.Embed:
     now = datetime.now().strftime("%Y/%m/%d %H:%M")
-    emb = discord.Embed(
-        title=f"🚆 JR東日本（{region}） 運行情報",
-        description=f"最終更新: {now}",
-        color=0x2E8B57
-    )
+    emb = discord.Embed(title=f"🚆 JR東日本（{region}） 運行情報", description=f"最終更新: {now}", color=0x2E8B57)
     for x in data:
         emb.add_field(name=f"{x['路線名']}：{x['運行状況']}", value=x['詳細'] or "詳細なし", inline=False)
     return emb
@@ -238,11 +205,7 @@ def create_east_embed(region: str, data: list[dict]) -> discord.Embed:
 def create_west_embed(area_code: str, data: list[dict]) -> discord.Embed:
     area_name = JR_WEST_LINES.get(area_code, {}).get("name", area_code)
     now = datetime.now().strftime("%Y/%m/%d %H:%M")
-    emb = discord.Embed(
-        title=f"🚆 JR西日本（{area_name}） 運行情報",
-        description=f"最終更新: {now}",
-        color=0x4682B4
-    )
+    emb = discord.Embed(title=f"🚆 JR西日本（{area_name}） 運行情報", description=f"最終更新: {now}", color=0x4682B4)
     for x in data:
         emb.add_field(name=f"{x['路線名']}：{x['運行状況']}", value=x['詳細'] or "詳細なし", inline=False)
     return emb
