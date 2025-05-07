@@ -9,26 +9,20 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import (
-    TimeoutException,
-    StaleElementReferenceException,
-    NoSuchElementException,
-    WebDriverException
-)
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 from dotenv import load_dotenv
 
 # ===== 設定 =====
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
-
-# 環境変数から Discord トークン読み込み
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
-    raise RuntimeError("Discord トークンが環境変数DISCORD_TOKENに設定されていません。")
+    raise RuntimeError("Environment variable DISCORD_TOKEN is not set.")
 
-# Bot 初期化（message_content intent 必須）
-intents = discord.Intents.all()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+# Bot 初期化
+intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -56,7 +50,28 @@ JR_WEST_LINES = {
         {"id": "sagano", "name": "嵯峨野線・山陰本線"},
         {"id": "kinokuni", "name": "きのくに線・紀勢本線"}
     ]},
-    # ほかのエリアも同様に...
+    "chugoku": {"name": "中国", "lines": [
+        {"id": "sanin", "name": "山陰本線"},
+        {"id": "hakubi", "name": "伯備線"},
+        {"id": "kabe", "name": "可部線"},
+        {"id": "geibi", "name": "芸備線"},
+        {"id": "sanyo", "name": "山陽本線"}
+    ]},
+    "shikoku": {"name": "四国", "lines": [
+        {"id": "yosan", "name": "予讃線"},
+        {"id": "dosan", "name": "土讃線"},
+        {"id": "kotoku", "name": "高徳線"},
+        {"id": "naruto", "name": "鳴門線"},
+        {"id": "tokushima", "name": "徳島線"}
+    ]},
+    "kyushu": {"name": "九州", "lines": [
+        {"id": "kagoshima", "name": "鹿児島本線"},
+        {"id": "nippo", "name": "日豊本線"},
+        {"id": "chikuhi", "name": "筑肥線"},
+        {"id": "sasebo", "name": "佐世保線"},
+        {"id": "nagasaki", "name": "長崎本線"},
+        {"id": "hisatsu", "name": "肥薩線"}
+    ]}
 }
 
 # フィルタキーワード
@@ -64,8 +79,7 @@ DISRUPTION_KEYWORDS = ["運休", "運転見合わせ", "遅延"]
 
 # メッセージ保持用
 train_messages = {"east": {}, "west": {}}
-
-# --- コマンド発行チャンネル記録用 ---
+# 自動投稿先チャンネル（コマンド実行時にセット）
 REQUEST_CHANNEL = None
 
 # ===== Selenium設定 =====
@@ -87,14 +101,14 @@ def create_driver():
 # ===== 補助関数 =====
 def should_include(status: str, detail: str) -> bool:
     normal_patterns = ["平常", "通常", "現在も平常どおり", "平常どおり", "問題なく", "通り運転", "通常通り"]
-    is_normal = any(pat in status for pat in normal_patterns)
-    return not is_normal or (detail and detail.strip() != "")
+    return not any(p in status for p in normal_patterns) or bool(detail and detail.strip())
 
-# --- JR東日本情報取得（Selenium使用） ---
+# --- JR東日本情報取得 ---
 def get_jr_east_filtered(region: str, area_code: int) -> list[dict]:
     url = f"https://transit.yahoo.co.jp/traininfo/area/{area_code}/"
-    max_retries, retry_count, driver = 5, 0, None
-    while retry_count < max_retries:
+    retries, max_retries = 0, 5
+    driver = None
+    while retries < max_retries:
         try:
             if not driver:
                 driver = create_driver()
@@ -102,44 +116,41 @@ def get_jr_east_filtered(region: str, area_code: int) -> list[dict]:
             WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "ul.linesWrap li"))
             )
-            info = []
+            items = []
             for el in driver.find_elements(By.CSS_SELECTOR, "ul.linesWrap li"):
                 try:
                     name = el.find_element(By.CSS_SELECTOR, ".labelLine").text.strip()
                     status = el.find_element(By.CSS_SELECTOR, ".labelStatus").text.strip()
-                    try:
-                        detail = el.find_element(By.CSS_SELECTOR, ".trouble").text.strip()
-                    except NoSuchElementException:
-                        detail = ""
+                    detail = el.find_element(By.CSS_SELECTOR, ".trouble").text.strip() if el.find_elements(By.CSS_SELECTOR, ".trouble") else ""
                     if should_include(status, detail):
-                        info.append({"路線名": name, "運行状況": status, "詳細": detail})
-                except Exception as e:
-                    logger.warning(f"解析中エラー: {e}")
-            return info
-        except (TimeoutException, WebDriverException) as e:
-            retry_count += 1
-            logger.warning(f"JR東日本 {region} 読込失敗 {retry_count}/{max_retries}: {e}")
+                        items.append({"路線名": name, "運行状況": status, "詳細": detail})
+                except Exception as ex:
+                    logger.warning(f"JR東日本解析エラー: {ex}")
+            return items
+        except (TimeoutException, WebDriverException) as ex:
+            retries += 1
+            logger.warning(f"JR東日本 {region} 読込失敗 ({retries}/{max_retries}): {ex}")
             if driver:
                 try: driver.quit()
                 except: pass
                 driver = None
-        except Exception as e:
-            logger.exception(f"JR東日本 {region} 予期せぬエラー: {e}")
+        except Exception as ex:
+            logger.exception(f"JR東日本 {region} 予期せぬエラー: {ex}")
             if driver:
                 try: driver.quit()
                 except: pass
-            return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": str(e)}]
+            return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": str(ex)}]
     if driver:
         try: driver.quit()
         except: pass
-    return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": f"最大リトライ超過"}]
+    return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": "最大リトライ超過"}]
 
 # --- JR西日本情報取得 ---
 def get_jr_west_filtered(area_code: str) -> list[dict]:
-    info, has_data = [], False
     area = JR_WEST_LINES.get(area_code)
     if not area:
-        return [{"路線名": f"不明なエリア {area_code}", "運行状況": "エラー", "詳細": "無効なエリアコード"}]
+        return [{"路線名": f"不明エリア {area_code}", "運行状況": "エラー", "詳細": "無効なエリアコード"}]
+    items, has_data = [], False
     for ln in area["lines"]:
         lid, lname = ln["id"], ln["name"]
         try:
@@ -151,15 +162,15 @@ def get_jr_west_filtered(area_code: str) -> list[dict]:
             status = data.get("status", {}).get("text", "")
             detail = data.get("status", {}).get("detail", "")
             if should_include(status, detail):
-                info.append({"路線コード": lid, "路線名": lname, "運行状況": status, "詳細": detail or "詳細なし"})
-        except Exception as e:
-            logger.warning(f"JR西日本 {lname} エラー: {e}")
-            info.append({"路線コード": lid, "路線名": lname, "運行状況": "エラー", "詳細": str(e)})
-    if not info and has_data:
+                items.append({"路線名": lname, "運行状況": status, "詳細": detail or "詳細なし"})
+        except Exception as ex:
+            logger.warning(f"JR西日本 {lname} エラー: {ex}")
+            items.append({"路線名": lname, "運行状況": "エラー", "詳細": str(ex)})
+    if not items and has_data:
         return [{"路線名": f"{area['name']}全線", "運行状況": "問題ありません", "詳細": ""}]
     if not has_data:
-        return [{"路線名": f"{area['name']}エリア", "運行状況": "情報取得不可", "詳細": "取得失敗"}]
-    return info
+        return [{"路線名": f"{area['name']}全線", "運行状況": "情報取得不可", "詳細": "取得失敗"}]
+    return items
 
 # --- Embed作成 ---
 def create_east_embed(region: str, data: list[dict]) -> discord.Embed:
@@ -169,53 +180,47 @@ def create_east_embed(region: str, data: list[dict]) -> discord.Embed:
         emb.add_field(name=f"{x['路線名']}：{x['運行状況']}", value=x['詳細'], inline=False)
     return emb
 
-def create_west_embed(code: str, data: list[dict]) -> discord.Embed:
-    name = JR_WEST_LINES.get(code, {}).get("name", code)
+
+def create_west_embed(area_code: str, data: list[dict]) -> discord.Embed:
+    name = JR_WEST_LINES.get(area_code, {}).get("name", area_code)
     now = datetime.now().strftime("%Y/%m/%d %H:%M")
     emb = discord.Embed(title=f"🚆 JR西日本（{name}）運行情報", description=f"最終更新: {now}", color=0x4682B4)
     for x in data:
-        line = x.get("路線名") or x.get("路線コード")
-        emb.add_field(name=f"{line}：{x['運行状況']}", value=x['詳細'], inline=False)
+        emb.add_field(name=f"{x['路線名']}：{x['運行状況']}", value=x['詳細'], inline=False)
     return emb
 
 # ===== 定期更新タスク =====
 @tasks.loop(minutes=30)
 async def update_train_info():
     global REQUEST_CHANNEL
-    if REQUEST_CHANNEL is None:
+    if not REQUEST_CHANNEL:
         return
     ch = REQUEST_CHANNEL
-    logger.info(f"自動更新: チャンネル {ch.id}")
+    logger.info(f"自動更新投稿: チャンネル {ch.id}")
     for reg, code in YAHOO_AREAS.items():
-        try:
-            data = get_jr_east_filtered(reg, code)
-            emb = create_east_embed(reg, data)
-            if reg in train_messages['east']:
-                try:
-                    await train_messages['east'][reg].edit(embed=emb)
-                except discord.NotFound:
-                    m = await ch.send(embed=emb)
-                    train_messages['east'][reg] = m
-            else:
+        data = get_jr_east_filtered(reg, code)
+        emb = create_east_embed(reg, data)
+        if reg in train_messages['east']:
+            try:
+                await train_messages['east'][reg].edit(embed=emb)
+            except discord.NotFound:
                 m = await ch.send(embed=emb)
                 train_messages['east'][reg] = m
-        except Exception as e:
-            logger.exception(e)
+        else:
+            m = await ch.send(embed=emb)
+            train_messages['east'][reg] = m
     for area in JR_WEST_LINES.keys():
-        try:
-            data = get_jr_west_filtered(area)
-            emb = create_west_embed(area, data)
-            if area in train_messages['west']:
-                try:
-                    await train_messages['west'][area].edit(embed=emb)
-                except discord.NotFound:
-                    m = await ch.send(embed=emb)
-                    train_messages['west'][area] = m
-            else:
+        data = get_jr_west_filtered(area)
+        emb = create_west_embed(area, data)
+        if area in train_messages['west']:
+            try:
+                await train_messages['west'][area].edit(embed=emb)
+            except discord.NotFound:
                 m = await ch.send(embed=emb)
                 train_messages['west'][area] = m
-        except Exception as e:
-            logger.exception(e)
+        else:
+            m = await ch.send(embed=emb)
+            train_messages['west'][area] = m
 
 # ===== コマンド =====
 @bot.command(name="運行情報")
@@ -226,13 +231,13 @@ async def train_info(ctx: commands.Context):
     for reg, code in YAHOO_AREAS.items():
         data = get_jr_east_filtered(reg, code)
         emb = create_east_embed(reg, data)
-        m = await ctx.send(embed=emb)
-        train_messages['east'][reg] = m
+        msg = await ctx.send(embed=emb)
+        train_messages['east'][reg] = msg
     for area in JR_WEST_LINES.keys():
         data = get_jr_west_filtered(area)
         emb = create_west_embed(area, data)
-        m = await ctx.send(embed=emb)
-        train_messages['west'][area] = m
+        msg = await ctx.send(embed=emb)
+        train_messages['west'][area] = msg
 
 @bot.command(name="運行情報更新")
 async def update_info(ctx: commands.Context):
@@ -240,12 +245,13 @@ async def update_info(ctx: commands.Context):
     await update_train_info()
     await ctx.send("✅ 更新完了しました！")
 
+# ===== 起動時イベント =====
 @bot.event
 async def on_ready():
     logger.info(f"Bot 起動: {bot.user}")
     if not update_train_info.is_running():
         update_train_info.start()
 
-# ===== メイン =====
+# ===== エントリポイント =====
 if __name__ == "__main__":
     bot.run(TOKEN)
