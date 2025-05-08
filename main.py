@@ -2,7 +2,7 @@ import os
 import logging
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands, tasks
@@ -122,7 +122,7 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
 
 # ===== 埋め込み作成 =====
 def create_embed(prefix: str, region: str, data: list[dict], color: int) -> discord.Embed:
-    now = datetime.now().strftime("%Y/%m/%d %H:%M")
+    now = (datetime.now() + timedelta(hours=9)).strftime("%Y/%m/%d %H:%M")
     title = f"🚆 {prefix}（{region}） 運行情報"
     emb = discord.Embed(title=title, description=f"最終更新: {now}", color=color)
     for x in data:
