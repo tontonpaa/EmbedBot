@@ -16,7 +16,10 @@ if not TOKEN:
     raise RuntimeError("Environment variable DISCORD_TOKEN is not set.")
 
 # ロギング設定
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Bot 初期化
@@ -46,6 +49,9 @@ DISRUPTION_KEYWORDS = ["運休", "運転見合わせ", "遅延"]
 train_messages = {"east": {}, "west": {}}
 REQUEST_CHANNEL = None
 
+# 自動更新実行カウンタ
+update_counter = 0
+
 # ===== ヘルパー =====
 def should_include(status: str, detail: str) -> bool:
     """平常運転表現を除外し、異常または詳細ありを表示対象とする"""
@@ -53,21 +59,17 @@ def should_include(status: str, detail: str) -> bool:
     return not any(p in status for p in normal) or bool(detail and detail.strip())
 
 def fetch_area_info(region: str, area_code: int) -> list[dict]:
-    """
-    Yahoo! 路線情報の指定エリアページから運行トラブル一覧を取得し、
-    各路線ページに遷移して正確な路線名と詳細をスクレイピングする
-    """
     base_url = "https://transit.yahoo.co.jp"
     url = f"{base_url}/diainfo/area/{area_code}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
     except Exception as e:
         logger.error(f"{region} ページ取得エラー: {e}")
         return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": str(e)}]
 
-    soup = BeautifulSoup(r.text, "html.parser")
+    soup = BeautifulSoup(resp.text, "html.parser")
     items = []
 
     # 運行障害テーブルを持つ div.elmTblLstLine.trouble をパース
@@ -75,7 +77,7 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
         tbl = div.find("table")
         if not tbl:
             continue
-        for tr in tbl.select("tbody > tr")[1:]:  # ヘッダー行をスキップ
+        for tr in tbl.select("tbody > tr")[1:]:
             cols = tr.find_all("td")
             if len(cols) < 3:
                 continue
@@ -102,11 +104,7 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
             detail = dd.get_text(strip=True) if dd else cols[2].get_text(strip=True)
 
             if name and status and should_include(status, detail):
-                items.append({
-                    "路線名": name,
-                    "運行状況": status,
-                    "詳細": detail
-                })
+                items.append({"路線名": name, "運行状況": status, "詳細": detail})
 
     if not items:
         return [{"路線名": f"{region}全線", "運行状況": "平常運転", "詳細": ""}]
@@ -137,17 +135,22 @@ async def send_error_report(ch, message, error):
 # ===== 定期更新タスク =====
 @tasks.loop(minutes=30)
 async def update_train_info():
-    global REQUEST_CHANNEL
+    global REQUEST_CHANNEL, update_counter
+    update_counter += 1
+    logger.info(f"自動更新タスク開始 #{update_counter}")
+
     try:
         if not REQUEST_CHANNEL:
+            logger.info("REQUEST_CHANNEL 未設定のためスキップ")
             return
         ch = REQUEST_CHANNEL
 
         # JR東日本
         for region, code in YAHOO_EAST_AREAS.items():
             try:
+                logger.info(f"[#{update_counter}] JR東日本 {region} 更新処理開始")
                 data = fetch_area_info(region, code)
-                emb  = create_embed("JR東日本", region, data, 0x2E8B57)
+                emb = create_embed("JR東日本", region, data, 0x2E8B57)
                 if region in train_messages["east"]:
                     try:
                         await train_messages["east"][region].edit(embed=emb)
@@ -157,15 +160,17 @@ async def update_train_info():
                 else:
                     msg = await ch.send(embed=emb)
                     train_messages["east"][region] = msg
+                logger.info(f"[#{update_counter}] JR東日本 {region} 更新処理完了")
             except Exception as e:
-                logger.exception(f"JR東日本 {region} の更新処理でエラー")
+                logger.exception(f"JR東日本 {region} の更新処理でエラー（#{update_counter}）")
                 await send_error_report(ch, f"JR東日本 {region} 更新中にエラー", e)
 
         # JR西日本
         for region, code in YAHOO_WEST_AREAS.items():
             try:
+                logger.info(f"[#{update_counter}] JR西日本 {region} 更新処理開始")
                 data = fetch_area_info(region, code)
-                emb  = create_embed("JR西日本", region, data, 0x4682B4)
+                emb = create_embed("JR西日本", region, data, 0x4682B4)
                 if region in train_messages["west"]:
                     try:
                         await train_messages["west"][region].edit(embed=emb)
@@ -175,12 +180,14 @@ async def update_train_info():
                 else:
                     msg = await ch.send(embed=emb)
                     train_messages["west"][region] = msg
+                logger.info(f"[#{update_counter}] JR西日本 {region} 更新処理完了")
             except Exception as e:
-                logger.exception(f"JR西日本 {region} の更新処理でエラー")
+                logger.exception(f"JR西日本 {region} の更新処理でエラー（#{update_counter}）")
                 await send_error_report(ch, f"JR西日本 {region} 更新中にエラー", e)
 
+        logger.info(f"自動更新タスク完了 #{update_counter}")
     except Exception as e:
-        logger.error("update_train_info: 予期せぬエラーが発生しました。ループを継続します。")
+        logger.error(f"update_train_info: 予期せぬエラーが発生しました（#{update_counter}）。ループを継続します。")
         traceback.print_exc()
 
 @update_train_info.error
@@ -197,15 +204,15 @@ async def train_info(ctx: commands.Context):
     # JR東日本
     for region, code in YAHOO_EAST_AREAS.items():
         data = fetch_area_info(region, code)
-        emb  = create_embed("JR東日本", region, data, 0x2E8B57)
-        msg  = await ctx.send(embed=emb)
+        emb = create_embed("JR東日本", region, data, 0x2E8B57)
+        msg = await ctx.send(embed=emb)
         train_messages["east"][region] = msg
 
     # JR西日本
     for region, code in YAHOO_WEST_AREAS.items():
         data = fetch_area_info(region, code)
-        emb  = create_embed("JR西日本", region, data, 0x4682B4)
-        msg  = await ctx.send(embed=emb)
+        emb = create_embed("JR西日本", region, data, 0x4682B4)
+        msg = await ctx.send(embed=emb)
         train_messages["west"][region] = msg
 
 @bot.command(name="運行情報更新")
