@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+import traceback
 import requests
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -79,10 +80,7 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
             if len(cols) < 3:
                 continue
 
-            # ステータスはそのまま取得
             status = cols[1].get_text(strip=True)
-
-            # テーブル内のリンクをたどって詳細ページへ
             a_tag = cols[0].find("a", href=True)
             if not a_tag:
                 continue
@@ -98,12 +96,8 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
                 continue
 
             lsoup = BeautifulSoup(lr.text, "html.parser")
-
-            # 路線名を <div class="labelLarge"> <h1 class="title"> から取得
             title_h1 = lsoup.select_one("div.labelLarge h1.title")
             name = title_h1.get_text(strip=True) if title_h1 else a_tag.get_text(strip=True)
-
-            # 詳細を <dd class="trouble"> <p> から取得
             dd = lsoup.select_one("dd.trouble p")
             detail = dd.get_text(strip=True) if dd else cols[2].get_text(strip=True)
 
@@ -115,9 +109,7 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
                 })
 
     if not items:
-        # 異常情報がなければ「平常運転」として返す
         return [{"路線名": f"{region}全線", "運行状況": "平常運転", "詳細": ""}]
-
     return items
 
 # ===== 埋め込み作成 =====
@@ -146,46 +138,55 @@ async def send_error_report(ch, message, error):
 @tasks.loop(minutes=30)
 async def update_train_info():
     global REQUEST_CHANNEL
-    if not REQUEST_CHANNEL:
-        return
+    try:
+        if not REQUEST_CHANNEL:
+            return
+        ch = REQUEST_CHANNEL
 
-    ch = REQUEST_CHANNEL
-
-    # JR東日本
-    for region, code in YAHOO_EAST_AREAS.items():
-        try:
-            data = fetch_area_info(region, code)
-            emb  = create_embed("JR東日本", region, data, 0x2E8B57)
-            if region in train_messages["east"]:
-                try:
-                    await train_messages["east"][region].edit(embed=emb)
-                except discord.NotFound:
+        # JR東日本
+        for region, code in YAHOO_EAST_AREAS.items():
+            try:
+                data = fetch_area_info(region, code)
+                emb  = create_embed("JR東日本", region, data, 0x2E8B57)
+                if region in train_messages["east"]:
+                    try:
+                        await train_messages["east"][region].edit(embed=emb)
+                    except discord.NotFound:
+                        msg = await ch.send(embed=emb)
+                        train_messages["east"][region] = msg
+                else:
                     msg = await ch.send(embed=emb)
                     train_messages["east"][region] = msg
-            else:
-                msg = await ch.send(embed=emb)
-                train_messages["east"][region] = msg
-        except Exception as e:
-            logger.exception(f"自動更新 JR東日本 {region} エラー")
-            await send_error_report(ch, f"JR東日本 {region} 自動更新中にエラー", e)
+            except Exception as e:
+                logger.exception(f"JR東日本 {region} の更新処理でエラー")
+                await send_error_report(ch, f"JR東日本 {region} 更新中にエラー", e)
 
-    # JR西日本
-    for region, code in YAHOO_WEST_AREAS.items():
-        try:
-            data = fetch_area_info(region, code)
-            emb  = create_embed("JR西日本", region, data, 0x4682B4)
-            if region in train_messages["west"]:
-                try:
-                    await train_messages["west"][region].edit(embed=emb)
-                except discord.NotFound:
+        # JR西日本
+        for region, code in YAHOO_WEST_AREAS.items():
+            try:
+                data = fetch_area_info(region, code)
+                emb  = create_embed("JR西日本", region, data, 0x4682B4)
+                if region in train_messages["west"]:
+                    try:
+                        await train_messages["west"][region].edit(embed=emb)
+                    except discord.NotFound:
+                        msg = await ch.send(embed=emb)
+                        train_messages["west"][region] = msg
+                else:
                     msg = await ch.send(embed=emb)
                     train_messages["west"][region] = msg
-            else:
-                msg = await ch.send(embed=emb)
-                train_messages["west"][region] = msg
-        except Exception as e:
-            logger.exception(f"自動更新 JR西日本 {region} エラー")
-            await send_error_report(ch, f"JR西日本 {region} 自動更新中にエラー", e)
+            except Exception as e:
+                logger.exception(f"JR西日本 {region} の更新処理でエラー")
+                await send_error_report(ch, f"JR西日本 {region} 更新中にエラー", e)
+
+    except Exception as e:
+        logger.error("update_train_info: 予期せぬエラーが発生しました。ループを継続します。")
+        traceback.print_exc()
+
+@update_train_info.error
+async def update_train_info_error(error):
+    logger.error(f"update_train_info の error ハンドラが例外をキャッチ: {error}")
+    traceback.print_exc()
 
 # ===== コマンド =====
 @bot.command(name="運行情報")
