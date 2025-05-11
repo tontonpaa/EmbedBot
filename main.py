@@ -38,12 +38,9 @@ def load_state():
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             state = json.load(f)
             REQUEST_CHANNEL = state.get("channel_id")
-            train_messages = state.get("messages", {"east": {}, "west": {}})
-            logger.info("状態を復元しました")
-    except FileNotFoundError:
+            train_messages.update(state.get("messages", {}))
+    except:
         pass
-    except Exception as e:
-        logger.warning(f"状態復元に失敗: {e}")
 
 def save_state():
     try:
@@ -52,20 +49,18 @@ def save_state():
                 "channel_id": REQUEST_CHANNEL,
                 "messages": train_messages
             }, f, ensure_ascii=False, indent=2)
-            logger.info("状態を保存しました")
     except Exception as e:
-        logger.error(f"状態保存に失敗: {e}")
+        logger.error(f"state save failed: {e}")
 
-# ===== ブロッキング処理をスレッドに回す =====
-def _fetch_area_info_sync(region: str, area_code: int) -> list[dict]:
-    base_url = "https://transit.yahoo.co.jp"
-    url = f"{base_url}/diainfo/area/{area_code}"
+# ===== ブロック処理スレッド化 =====
+def _fetch_area_info_sync(region: str, code: int) -> list[dict]:
+    base = "https://transit.yahoo.co.jp"
+    url = f"{base}/diainfo/area/{code}"
     headers = {"User-Agent": "Mozilla/5.0"}
     resp = requests.get(url, headers=headers, timeout=15)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     items = []
-
     for div in soup.select("div.elmTblLstLine"):
         tbl = div.find("table")
         if not tbl:
@@ -78,104 +73,80 @@ def _fetch_area_info_sync(region: str, area_code: int) -> list[dict]:
             detail_preview = cols[2].get_text(strip=True)
             if not (any(kw in status for kw in DISRUPTION_KEYWORDS) or any(kw in detail_preview for kw in DISRUPTION_KEYWORDS)):
                 continue
-            a_tag = cols[0].find("a", href=True)
+            a = cols[0].find("a", href=True)
             name = cols[0].get_text(strip=True)
             detail = detail_preview
-            if a_tag:
-                link = base_url + a_tag["href"]
+            if a:
+                link = base + a["href"]
                 try:
                     lr = requests.get(link, headers=headers, timeout=15)
                     lr.raise_for_status()
                     lsoup = BeautifulSoup(lr.text, "html.parser")
-                    title_h1 = lsoup.select_one("div.labelLarge h1.title")
-                    name = title_h1.get_text(strip=True) if title_h1 else name
+                    h1 = lsoup.select_one("div.labelLarge h1.title")
+                    name = h1.get_text(strip=True) if h1 else name
                     dd = lsoup.select_one("dd.trouble p")
-                    detail = dd.get_text(strip=True) if dd else detail_preview
-                except Exception:
+                    detail = dd.get_text(strip=True) if dd else detail
+                except:
                     pass
             items.append({"路線名": name, "運行状況": status, "詳細": detail})
-
     return items or [{"路線名": f"{region}全線", "運行状況": "平常運転", "詳細": ""}]
 
-async def fetch_area_info(region: str, area_code: int) -> list[dict]:
-    return await asyncio.to_thread(_fetch_area_info_sync, region, area_code)
+async def fetch_area_info(region: str, code: int) -> list[dict]:
+    return await asyncio.to_thread(_fetch_area_info_sync, region, code)
 
-# ===== Embed作成 =====
-def create_embed(prefix: str, region: str, data: list[dict], color: int) -> discord.Embed:
+# ===== Embed分割送信 =====
+async def send_paginated_embeds(prefix: str, region: str, data: list[dict], color: int, channel: discord.TextChannel):
+    """データを25件ずつEmbedに分けて送信"""
     now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y/%m/%d %H:%M")
-    emb = discord.Embed(
-        title=f"🚆 {prefix}（{region}） 運行情報",
-        description=f"最終更新: {now}",
-        color=color
-    )
-    for x in data:
-        emb.add_field(name=f"{x['路線名']}：{x['運行状況']}",
-                      value=x['詳細'] or "詳細なし", inline=False)
-    return emb
+    per_page = 25
+    pages = (len(data) + per_page - 1) // per_page
+    for i in range(pages):
+        emb = discord.Embed(
+            title=f"🚆 {prefix}（{region}） 運行情報 ({i+1}/{pages})",
+            description=f"最終更新: {now}",
+            color=color
+        )
+        start = i * per_page
+        for entry in data[start:start+per_page]:
+            name = f"{entry['路線名']}：{entry['運行状況']}"[:256]
+            val  = (entry['詳細'] or "詳細なし")[:1024]
+            emb.add_field(name=name, value=val, inline=False)
+        await channel.send(embed=emb)
 
+# ===== エラー通知 =====
 async def send_error_report(ch, message, error):
     emb = discord.Embed(title="🔴 エラー発生", description=message, color=0xFF0000)
     emb.add_field(name="詳細", value=f"```\n{error}\n```", inline=False)
     await ch.send(embed=emb)
 
-# ===== 自動更新タスク =====
+# ===== 自動更新 =====
 @tasks.loop(minutes=30)
 async def update_train_info():
     global update_counter
     update_counter += 1
-    logger.info(f"[#{update_counter}] auto-update start")
-
     if not REQUEST_CHANNEL:
-        logger.info("REQUEST_CHANNEL not set, skipping")
         return
-
     ch = bot.get_channel(REQUEST_CHANNEL)
-    if ch is None:
-        logger.warning("保存されたチャンネルが見つかりません")
+    if not ch:
         return
 
     # 東日本
     for region, code in YAHOO_EAST_AREAS.items():
         try:
             data = await fetch_area_info(region, code)
-            emb = create_embed("JR東日本", region, data, 0x2E8B57)
-            msg_id = train_messages["east"].get(region)
-            if msg_id:
-                try:
-                    msg = await ch.fetch_message(msg_id)
-                    await msg.edit(embed=emb)
-                except discord.NotFound:
-                    msg = await ch.send(embed=emb)
-            else:
-                msg = await ch.send(embed=emb)
-            train_messages["east"][region] = msg.id
+            await send_paginated_embeds("JR東日本", region, data, 0x2E8B57, ch)
         except Exception as e:
-            await send_error_report(ch, f"JR東日本 {region} 更新エラー", e)
+            await send_error_report(ch, f"JR東日本 {region} 更新失敗", e)
 
     # 西日本
     for region, code in YAHOO_WEST_AREAS.items():
         try:
             data = await fetch_area_info(region, code)
-            emb = create_embed("JR西日本", region, data, 0x4682B4)
-            msg_id = train_messages["west"].get(region)
-            if msg_id:
-                try:
-                    msg = await ch.fetch_message(msg_id)
-                    await msg.edit(embed=emb)
-                except discord.NotFound:
-                    msg = await ch.send(embed=emb)
-            else:
-                msg = await ch.send(embed=emb)
-            train_messages["west"][region] = msg.id
+            await send_paginated_embeds("JR西日本", region, data, 0x4682B4, ch)
         except Exception as e:
-            await send_error_report(ch, f"JR西日本 {region} 更新エラー", e)
+            await send_error_report(ch, f"JR西日本 {region} 更新失敗", e)
 
     save_state()
-
-@update_train_info.error
-async def update_train_info_error(err):
-    logger.error(f"update_train_info error handler: {err}")
-    traceback.print_exc()
 
 # ===== コマンド =====
 @bot.command(name="運行情報")
@@ -188,37 +159,28 @@ async def train_info(ctx: commands.Context):
     for region, code in YAHOO_EAST_AREAS.items():
         try:
             data = await fetch_area_info(region, code)
-            emb = create_embed("JR東日本", region, data, 0x2E8B57)
-            msg = await ctx.send(embed=emb)
-            train_messages["east"][region] = msg.id
+            await send_paginated_embeds("JR東日本", region, data, 0x2E8B57, ctx.channel)
         except Exception as e:
-            await send_error_report(ctx, f"JR東日本 {region} エラー", e)
+            await send_error_report(ctx, f"JR東日本 {region} 取得失敗", e)
 
     # 西日本
     for region, code in YAHOO_WEST_AREAS.items():
         try:
             data = await fetch_area_info(region, code)
-            emb = create_embed("JR西日本", region, data, 0x4682B4)
-            msg = await ctx.send(embed=emb)
-            train_messages["west"][region] = msg.id
+            await send_paginated_embeds("JR西日本", region, data, 0x4682B4, ctx.channel)
         except Exception as e:
-            await send_error_report(ctx, f"JR西日本 {region} エラー", e)
-
-    save_state()
+            await send_error_report(ctx, f"JR西日本 {region} 取得失敗", e)
 
 @bot.command(name="運行情報更新")
 async def update_info(ctx: commands.Context):
-    status = await ctx.send("🔄 手動更新中…")
     try:
-        # あくまでタスクのトリガーなので await せず起動だけ
-        bot.loop.create_task(update_train_info())
-        await status.edit(content="✅ 更新完了！")
+        await update_train_info()
+        await ctx.send("✅ 更新完了！")
     except Exception as e:
         await send_error_report(ctx.channel, "手動更新失敗", e)
 
 @bot.event
 async def on_ready():
-    logger.info(f"Bot ready: {bot.user}")
     load_state()
     if not update_train_info.is_running():
         update_train_info.start()
