@@ -73,7 +73,7 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
     url = f"{base_url}/diainfo/area/{area_code}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=60)
         resp.raise_for_status()
     except Exception as e:
         logger.error(f"{region} ページ取得エラー: {e}")
@@ -99,7 +99,7 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
             line_url = base_url + link
 
             try:
-                lr = requests.get(line_url, headers=headers, timeout=15)
+                lr = requests.get(line_url, headers=headers, timeout=60)
                 lr.raise_for_status()
             except Exception as e:
                 logger.warning(f"路線ページ取得失敗 ({line_url}): {e}")
