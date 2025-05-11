@@ -25,7 +25,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 YAHOO_EAST_AREAS = {"関東": 4, "東北": 3, "中部": 5}
 YAHOO_WEST_AREAS = {"近畿": 6, "九州": 7, "中国": 8, "四国": 9}
-DISRUPTION_KEYWORDS = ["運休", "運転見合わせ", "遅延", "その他", "運転計画", "運行情報"]
+DISRUPTION_KEYWORDS = ["運休", "運転見合わせ", "列車遅延", "その他", "運転計画", "運行情報"]
 
 train_messages = {"east": {}, "west": {}}
 REQUEST_CHANNEL = None
