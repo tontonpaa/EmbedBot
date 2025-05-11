@@ -17,6 +17,7 @@ if not TOKEN:
 
 MESSAGE_FILE = "message_ids.json"
 
+# ロギング設定
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def load_message_ids():
     except FileNotFoundError:
         return {"east": {}, "west": {}}
     except Exception as e:
-        logger.error(f"message_ids.json 読み込みエラー: {e}")
+        logger.error(f"message_ids.json load error: {e}")
         return {"east": {}, "west": {}}
 
 def save_message_ids(data):
@@ -52,7 +53,7 @@ def save_message_ids(data):
         with open(MESSAGE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        logger.error(f"message_ids.json 書き込みエラー: {e}")
+        logger.error(f"message_ids.json save error: {e}")
 
 # ===== ヘルパー =====
 def should_include(status: str, detail: str) -> bool:
@@ -67,7 +68,7 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
         r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
     except Exception as e:
-        logger.error(f"{region} ページ取得エラー: {e}")
+        logger.error(f"{region} page fetch error: {e}")
         return [{"路線名": f"{region}エリア", "運行状況": "エラー", "詳細": str(e)}]
 
     soup = BeautifulSoup(r.text, "html.parser")
@@ -89,7 +90,7 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
                 lr = requests.get(link, headers=headers, timeout=15)
                 lr.raise_for_status()
             except Exception as e:
-                logger.warning(f"路線ページ取得失敗 ({link}): {e}")
+                logger.warning(f"line page fetch failed ({link}): {e}")
                 continue
             lsoup = BeautifulSoup(lr.text, "html.parser")
             title = lsoup.select_one("div.labelLarge h1.title")
@@ -98,18 +99,23 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
             detail = dd.get_text(strip=True) if dd else cols[2].get_text(strip=True)
             if name and status and should_include(status, detail):
                 items.append({"路線名": name, "運行状況": status, "詳細": detail})
-
     if not items:
         return [{"路線名": f"{region}全線", "運行状況": "平常運転", "詳細": ""}]
     return items
 
 def create_embed(prefix: str, region: str, data: list[dict], color: int) -> discord.Embed:
-    now = (datetime.now() + timedelta(hours=9)).strftime("%Y/%m/%d %H:%M")
-    emb = discord.Embed(title=f"🚆 {prefix}（{region}） 運行情報",
-                        description=f"最終更新: {now}", color=color)
+    now = (datetime.utcnow() + timedelta(hours=9)).strftime("%Y/%m/%d %H:%M")
+    emb = discord.Embed(
+        title=f"🚆 {prefix}（{region}） 運行情報",
+        description=f"最終更新: {now}",
+        color=color
+    )
     for x in data:
-        emb.add_field(name=f"{x['路線名']}：{x['運行状況']}",
-                      value=x['詳細'] or "詳細なし", inline=False)
+        emb.add_field(
+            name=f"{x['路線名']}：{x['運行状況']}",
+            value=x['詳細'] or "詳細なし",
+            inline=False
+        )
     return emb
 
 async def send_error_report(ch, msg, err):
@@ -118,25 +124,25 @@ async def send_error_report(ch, msg, err):
         emb.add_field(name="詳細", value=f"```\n{err}\n```", inline=False)
         await ch.send(embed=emb)
     except Exception as e:
-        logger.error(f"エラーレポート送信失敗: {e}")
+        logger.error(f"error report send failed: {e}")
 
 # ===== 定期更新タスク =====
 @tasks.loop(minutes=30)
 async def update_train_info():
     global REQUEST_CHANNEL, update_counter
     update_counter += 1
-    logger.info(f"自動更新開始 #{update_counter}")
+    logger.info(f"[#{update_counter}] auto-update start")
 
     try:
         if REQUEST_CHANNEL is None:
-            logger.info("REQUEST_CHANNEL 未設定、スキップ")
+            logger.info("REQUEST_CHANNEL not set, skipping")
             return
         ch = REQUEST_CHANNEL
 
-        # 東日本
+        # East
         for region, code in YAHOO_EAST_AREAS.items():
             try:
-                logger.info(f"[#{update_counter}] 東日本 {region} 更新")
+                logger.info(f"[#{update_counter}] updating East {region}")
                 data = fetch_area_info(region, code)
                 emb = create_embed("JR東日本", region, data, 0x2E8B57)
                 msg_obj = train_messages["east"].get(region)
@@ -149,15 +155,15 @@ async def update_train_info():
                 else:
                     msg_obj = await ch.send(embed=emb)
                     train_messages["east"][region] = msg_obj
-                logger.info(f"[#{update_counter}] 東日本 {region} 更新完了")
+                logger.info(f"[#{update_counter}] East {region} done")
             except Exception as e:
-                logger.exception(f"東日本 {region} 更新エラー")
-                await send_error_report(ch, f"東日本 {region} 更新中にエラー", e)
+                logger.exception(f"East {region} update error")
+                await send_error_report(ch, f"East {region} update failed", e)
 
-        # 西日本
+        # West
         for region, code in YAHOO_WEST_AREAS.items():
             try:
-                logger.info(f"[#{update_counter}] 西日本 {region} 更新")
+                logger.info(f"[#{update_counter}] updating West {region}")
                 data = fetch_area_info(region, code)
                 emb = create_embed("JR西日本", region, data, 0x4682B4)
                 msg_obj = train_messages["west"].get(region)
@@ -170,66 +176,61 @@ async def update_train_info():
                 else:
                     msg_obj = await ch.send(embed=emb)
                     train_messages["west"][region] = msg_obj
-                logger.info(f"[#{update_counter}] 西日本 {region} 更新完了")
+                logger.info(f"[#{update_counter}] West {region} done")
             except Exception as e:
-                logger.exception(f"西日本 {region} 更新エラー")
-                await send_error_report(ch, f"西日本 {region} 更新中にエラー", e)
+                logger.exception(f"West {region} update error")
+                await send_error_report(ch, f"West {region} update failed", e)
 
-        logger.info(f"自動更新完了 #{update_counter}")
+        logger.info(f"[#{update_counter}] auto-update complete")
 
     except Exception as e:
-        logger.error(f"予期せぬエラーでループ継続（#{update_counter}）: {e}")
+        logger.error(f"[#{update_counter}] unexpected error, continuing loop")
         traceback.print_exc()
 
 @update_train_info.error
 async def update_train_info_error(err):
-    logger.error(f"update_train_info の error ハンドラで例外: {err}")
+    logger.error(f"update_train_info error handler caught: {err}")
     traceback.print_exc()
 
 # ===== !運行情報 コマンド =====
 @bot.command(name="運行情報")
 async def train_info(ctx: commands.Context):
     global REQUEST_CHANNEL
-
     REQUEST_CHANNEL = ctx.channel
+
     saved = load_message_ids()
 
-    # 東日本
+    # East
     for region, code in YAHOO_EAST_AREAS.items():
         data = fetch_area_info(region, code)
         emb = create_embed("JR東日本", region, data, 0x2E8B57)
-
-        # 前回メッセージIDがあれば編集、それ以外は新規送信
         entry = saved["east"].get(region)
         if entry:
             ch = bot.get_channel(entry["channel_id"])
             try:
                 msg_obj = await ch.fetch_message(entry["message_id"])
                 await msg_obj.edit(embed=emb)
-            except Exception:
+            except:
                 msg_obj = await ctx.send(embed=emb)
         else:
             msg_obj = await ctx.send(embed=emb)
-
         train_messages["east"][region] = msg_obj
         saved["east"][region] = {"channel_id": ctx.channel.id, "message_id": msg_obj.id}
 
-    # 西日本
+    # West
     for region, code in YAHOO_WEST_AREAS.items():
         data = fetch_area_info(region, code)
         emb = create_embed("JR西日本", region, data, 0x4682B4)
-
         entry = saved["west"].get(region)
         if entry:
             ch = bot.get_channel(entry["channel_id"])
             try:
                 msg_obj = await ch.fetch_message(entry["message_id"])
                 await msg_obj.edit(embed=emb)
-            except Exception:
+            except:
                 msg_obj = await ctx.send(embed=emb)
         else:
             msg_obj = await ctx.send(embed=emb)
-
         train_messages["west"][region] = msg_obj
         saved["west"][region] = {"channel_id": ctx.channel.id, "message_id": msg_obj.id}
 
@@ -238,58 +239,55 @@ async def train_info(ctx: commands.Context):
 # ===== !運行情報更新 コマンド =====
 @bot.command(name="運行情報更新")
 async def update_info(ctx: commands.Context):
-    status = await ctx.send("🔄 手動更新中…")
+    status = await ctx.send("🔄 manual update...")
     try:
         await update_train_info()
-        await status.edit(content="✅ 更新完了！")
+        await status.edit(content="✅ update complete")
     except Exception as e:
-        logger.exception("手動更新エラー")
-        await status.edit(content="❌ 更新失敗")
-        await send_error_report(ctx.channel, "手動更新中にエラー", e)
+        logger.exception("manual update error")
+        await status.edit(content="❌ update failed")
+        await send_error_report(ctx.channel, "manual update error", e)
 
 # ===== on_ready =====
 @bot.event
 async def on_ready():
-    logger.info(f"Bot 起動: {bot.user}")
-    # 起動時に保存済みメッセージを読み込み、train_messages を再構築
+    logger.info(f"Bot ready: {bot.user}")
     saved = load_message_ids()
     global REQUEST_CHANNEL
-    # 先に東日本側のチャンネル情報を取得
-    for region, entry in saved["east"].items():
+
+    # restore REQUEST_CHANNEL from first saved entry
+    for entry in saved["east"].values():
         ch = bot.get_channel(entry["channel_id"])
         if ch:
             REQUEST_CHANNEL = ch
             break
     if REQUEST_CHANNEL is None:
-        # 西日本でも同様
-        for region, entry in saved["west"].items():
+        for entry in saved["west"].values():
             ch = bot.get_channel(entry["channel_id"])
             if ch:
                 REQUEST_CHANNEL = ch
                 break
 
-    # メッセージオブジェクトを取得
+    # restore message objects
     for region, entry in saved["east"].items():
         ch = bot.get_channel(entry["channel_id"])
         if ch:
             try:
-                msg_obj = await ch.fetch_message(entry["message_id"])
-                train_messages["east"][region] = msg_obj
+                train_messages["east"][region] = await ch.fetch_message(entry["message_id"])
             except:
                 pass
     for region, entry in saved["west"].items():
         ch = bot.get_channel(entry["channel_id"])
         if ch:
             try:
-                msg_obj = await ch.fetch_message(entry["message_id"])
-                train_messages["west"][region] = msg_obj
+                train_messages["west"][region] = await ch.fetch_message(entry["message_id"])
             except:
                 pass
 
-    # 再起動時に即時更新
-    await update_train_info.callback()
+    # immediate update once
+    await update_train_info()
 
-    # ループ開始
+    # start loop
     if not update_train_info.is_running():
         update_train_info.start()
 
