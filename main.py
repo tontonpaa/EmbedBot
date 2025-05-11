@@ -15,22 +15,17 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 STATE_FILE = "state.json"
 
-# ロギング設定
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# Bot 初期化
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# エリアコード
 YAHOO_EAST_AREAS = {"関東": 4, "東北": 3, "中部": 5}
 YAHOO_WEST_AREAS = {"近畿": 6, "九州": 7, "中国": 8, "四国": 9}
-
 DISRUPTION_KEYWORDS = ["運休", "運転見合わせ", "遅延", "その他", "運転計画", "運行情報"]
 
-# 永続化オブジェクト
 train_messages = {"east": {}, "west": {}}
 REQUEST_CHANNEL = None
 update_counter = 0
@@ -42,7 +37,7 @@ def load_state():
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             state = json.load(f)
             REQUEST_CHANNEL = state.get("channel_id")
-            train_messages = state.get("messages", {"east": {}, "west": {}})
+            train_messages.update(state.get("messages", {}))
             logger.info("状態を復元しました")
     except FileNotFoundError:
         pass
@@ -70,7 +65,6 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
     headers = {"User-Agent": "Mozilla/5.0"}
     resp = requests.get(url, headers=headers, timeout=15)
     resp.raise_for_status()
-
     soup = BeautifulSoup(resp.text, "html.parser")
     items = []
 
@@ -86,8 +80,8 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
             detail_preview = cols[2].get_text(strip=True)
             if not should_include(status, detail_preview):
                 continue
-
             a_tag = cols[0].find("a", href=True)
+            name, detail = cols[0].get_text(strip=True), detail_preview
             if a_tag:
                 link = base_url + a_tag["href"]
                 try:
@@ -95,24 +89,14 @@ def fetch_area_info(region: str, area_code: int) -> list[dict]:
                     lr.raise_for_status()
                     lsoup = BeautifulSoup(lr.text, "html.parser")
                     title_h1 = lsoup.select_one("div.labelLarge h1.title")
-                    name = title_h1.get_text(strip=True) if title_h1 else a_tag.get_text(strip=True)
+                    name = title_h1.get_text(strip=True) if title_h1 else name
                     dd = lsoup.select_one("dd.trouble p")
-                    detail = dd.get_text(strip=True) if dd else detail_preview
+                    detail = dd.get_text(strip=True) if dd else detail
                 except Exception as e:
                     logger.warning(f"路線ページ取得失敗({link}): {e}")
-                    name = a_tag.get_text(strip=True)
-                    detail = detail_preview
-            else:
-                name = cols[0].get_text(strip=True)
-                detail = detail_preview
+            items.append({"路線名": name, "運行状況": status, "詳細": detail})
 
-            items.append({
-                "路線名": name,
-                "運行状況": status,
-                "詳細": detail
-            })
-
-    return items if items else [{"路線名": f"{region}全線", "運行状況": "平常運転", "詳細": ""}]
+    return items or [{"路線名": f"{region}全線", "運行状況": "平常運転", "詳細": ""}]
 
 def create_embed(prefix: str, region: str, data: list[dict], color: int) -> discord.Embed:
     now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y/%m/%d %H:%M")
@@ -147,7 +131,6 @@ async def update_train_info():
         logger.warning("保存されたチャンネルが見つかりません")
         return
 
-    # 東日本
     for region, code in YAHOO_EAST_AREAS.items():
         try:
             data = fetch_area_info(region, code)
@@ -159,15 +142,12 @@ async def update_train_info():
                     await msg.edit(embed=emb)
                 except discord.NotFound:
                     msg = await ch.send(embed=emb)
-                    train_messages["east"][region] = msg.id
             else:
                 msg = await ch.send(embed=emb)
-                train_messages["east"][region] = msg.id
+            train_messages["east"][region] = msg.id
         except Exception as e:
-            logger.exception(f"東日本 {region} 取得エラー")
-            await send_error_report(ch, f"東日本 {region} 更新失敗", e)
+            await send_error_report(ch, f"JR東日本 {region} 更新エラー", e)
 
-    # 西日本
     for region, code in YAHOO_WEST_AREAS.items():
         try:
             data = fetch_area_info(region, code)
@@ -179,13 +159,11 @@ async def update_train_info():
                     await msg.edit(embed=emb)
                 except discord.NotFound:
                     msg = await ch.send(embed=emb)
-                    train_messages["west"][region] = msg.id
             else:
                 msg = await ch.send(embed=emb)
-                train_messages["west"][region] = msg.id
+            train_messages["west"][region] = msg.id
         except Exception as e:
-            logger.exception(f"西日本 {region} 取得エラー")
-            await send_error_report(ch, f"西日本 {region} 更新失敗", e)
+            await send_error_report(ch, f"JR西日本 {region} 更新エラー", e)
 
     save_state()
 
@@ -201,7 +179,6 @@ async def train_info(ctx: commands.Context):
     REQUEST_CHANNEL = ctx.channel.id
     save_state()
 
-    # 東日本
     for region, code in YAHOO_EAST_AREAS.items():
         try:
             data = fetch_area_info(region, code)
@@ -209,10 +186,8 @@ async def train_info(ctx: commands.Context):
             msg = await ctx.send(embed=emb)
             train_messages["east"][region] = msg.id
         except Exception as e:
-            logger.exception(f"東日本 {region} コマンドエラー")
-            await send_error_report(ctx, f"東日本 {region} 情報取得失敗", e)
+            await send_error_report(ctx, f"JR東日本 {region} エラー", e)
 
-    # 西日本
     for region, code in YAHOO_WEST_AREAS.items():
         try:
             data = fetch_area_info(region, code)
@@ -220,8 +195,7 @@ async def train_info(ctx: commands.Context):
             msg = await ctx.send(embed=emb)
             train_messages["west"][region] = msg.id
         except Exception as e:
-            logger.exception(f"西日本 {region} コマンドエラー")
-            await send_error_report(ctx, f"西日本 {region} 情報取得失敗", e)
+            await send_error_report(ctx, f"JR西日本 {region} エラー", e)
 
     save_state()
 
@@ -232,14 +206,13 @@ async def update_info(ctx: commands.Context):
         await update_train_info()
         await status.edit(content="✅ 更新完了！")
     except Exception as e:
-        logger.exception("手動更新エラー")
-        await status.edit(content="❌ 更新失敗")
         await send_error_report(ctx.channel, "手動更新失敗", e)
 
 @bot.event
 async def on_ready():
     logger.info(f"Bot ready: {bot.user}")
     load_state()
+    # **同期処理はせず、タスクをスタートするだけ**
     if not update_train_info.is_running():
         update_train_info.start()
 
@@ -247,7 +220,6 @@ async def on_ready():
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
-    logger.exception("コマンドエラー")
     await send_error_report(ctx.channel, "コマンド実行エラー", error)
 
 if __name__ == "__main__":
