@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
+bot.presence_task_started = False
 
 YAHOO_EAST_AREAS = {"関東": 4, "東北": 3, "中部": 5}
 YAHOO_WEST_AREAS = {"近畿": 6, "九州": 7, "中国": 8, "四国": 9}
