@@ -19,8 +19,8 @@ STATE_FILE = "state.json"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-intents = discord.Intents.default()
-intents.message_content = True
+intents = discord.Intents.all()
+client = discord.Client(intents=intents)
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 YAHOO_EAST_AREAS = {"関東": 4, "東北": 3, "中部": 5}
@@ -29,6 +29,18 @@ DISRUPTION_KEYWORDS = ["運休", "運転見合わせ", "列車遅延", "その�
 
 # 埋め込みを送信するチャンネル群
 target_channels: list[discord.TextChannel] = []
+
+async def update_presence():
+    while True:
+        try:
+            ping = round(client.latency * 1000)
+            await client.change_presence(activity=discord.Game(name=f"Ping: {ping}ms"))
+            await asyncio.sleep(5)
+            await client.change_presence(activity=discord.Game(name=f"サーバー数: {len(client.guilds)}"))
+            await asyncio.sleep(5)
+        except Exception as e:
+            print(f"[update_presence エラー] {e}")
+            await asyncio.sleep(10)
 
 # ===== ブロック処理スレッド化 =====
 def _fetch_area_info_sync(region: str, code: int) -> list[dict]:
