@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+from typing import list
 
 # ===== 設定 =====
 load_dotenv()
@@ -22,13 +23,12 @@ logger = logging.getLogger(__name__)
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.presence_task_started = False
+target_channels: list[discord.TextChannel]
+bot.target_channels = []
 
 YAHOO_EAST_AREAS = {"関東": 4, "東北": 3, "中部": 5}
 YAHOO_WEST_AREAS = {"近畿": 6, "九州": 7, "中国": 8, "四国": 9}
 DISRUPTION_KEYWORDS = ["運休", "運転見合わせ", "列車遅延", "その他", "運転計画", "運行情報"]
-
-# 埋め込みを送信するチャンネル群
-target_channels: list[discord.TextChannel] = []
 
 # ===== ブロック処理スレッド化 =====
 def _fetch_area_info_sync(region: str, code: int) -> list[dict]:
@@ -39,6 +39,7 @@ def _fetch_area_info_sync(region: str, code: int) -> list[dict]:
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     items: list[dict] = []
+
     for div in soup.select("div.elmTblLstLine"):
         tbl = div.find("table")
         if not tbl:
@@ -66,7 +67,7 @@ def _fetch_area_info_sync(region: str, code: int) -> list[dict]:
                     name = h1.get_text(strip=True) if h1 else name
                     dd = lsoup.select_one("dd.trouble p")
                     detail = dd.get_text(strip=True) if dd else detail
-                except:
+                except Exception:
                     pass
 
             items.append({
@@ -103,14 +104,14 @@ async def send_paginated_embeds(prefix: str, region: str, data: list[dict], colo
 # ===== エラー通知 =====
 async def send_error_report(ch: discord.TextChannel, message: str, error: Exception):
     emb = discord.Embed(title="🔴 エラー発生", description=message, color=0xFF0000)
-    emb.add_field(name="詳細", value=f"```\n{error}\n```", inline=False)
+    emb.add_field(name="詳細", value=f"```\n{str(error)}\n```", inline=False)
     await ch.send(embed=emb)
 
 # ===== 自動更新タスク =====
 @tasks.loop(minutes=30)
 async def update_train_info():
     logger.info("自動更新開始")
-    for ch in target_channels:
+    for ch in bot.target_channels:
         # 東日本
         for region, code in YAHOO_EAST_AREAS.items():
             try:
@@ -136,12 +137,16 @@ async def update_error(error):
 @bot.event
 async def on_ready():
     logger.info(f"Bot 起動: {bot.user}")
+    await bot.wait_until_ready()
+
     # 「運行情報」を含むチャンネルを全ギルドから収集
+    bot.target_channels.clear()
     for guild in bot.guilds:
         for channel in guild.text_channels:
             if "運行情報" in channel.name and channel.permissions_for(guild.me).send_messages:
-                target_channels.append(channel)
-    if not target_channels:
+                bot.target_channels.append(channel)
+
+    if not bot.target_channels:
         logger.warning("運行情報チャンネルが見つかりませんでした。")
     else:
         # 起動時に一度送信
@@ -149,11 +154,13 @@ async def on_ready():
         # 30分ごとの自動更新開始
         if not update_train_info.is_running():
             update_train_info.start()
+
     if not bot.presence_task_started:
         bot.loop.create_task(update_presence())
         bot.presence_task_started = True
 
 async def update_presence():
+    await bot.wait_until_ready()
     while True:
         try:
             ping = round(bot.latency * 1000)
@@ -162,7 +169,7 @@ async def update_presence():
             await bot.change_presence(activity=discord.Game(name=f"サーバー数: {len(bot.guilds)}"))
             await asyncio.sleep(5)
         except Exception as e:
-            print(f"[update_presence エラー] {e}")
+            logger.error(f"[update_presence エラー] {e}")
             await asyncio.sleep(10)
 
 @bot.event
@@ -174,14 +181,19 @@ async def on_command_error(ctx, error):
 # ===== 手動コマンド =====
 @bot.command(name="運行情報")
 async def manual_info(ctx: commands.Context):
-    # コマンド発行時にも即座に送信
-    for channel in target_channels:
+    for channel in bot.target_channels:
         for region, code in YAHOO_EAST_AREAS.items():
-            data = await fetch_area_info(region, code)
-            await send_paginated_embeds("JR東日本", region, data, 0x2E8B57, channel)
+            try:
+                data = await fetch_area_info(region, code)
+                await send_paginated_embeds("JR東日本", region, data, 0x2E8B57, channel)
+            except Exception as e:
+                await send_error_report(channel, f"手動 JR東日本 {region} 取得失敗", e)
         for region, code in YAHOO_WEST_AREAS.items():
-            data = await fetch_area_info(region, code)
-            await send_paginated_embeds("JR西日本", region, data, 0x4682B4, channel)
+            try:
+                data = await fetch_area_info(region, code)
+                await send_paginated_embeds("JR西日本", region, data, 0x4682B4, channel)
+            except Exception as e:
+                await send_error_report(channel, f"手動 JR西日本 {region} 取得失敗", e)
 
 if __name__ == "__main__":
     bot.run(TOKEN)
