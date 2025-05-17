@@ -10,7 +10,6 @@ from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-from typing import list
 
 # ===== 設定 =====
 load_dotenv()
