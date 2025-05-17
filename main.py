@@ -161,6 +161,21 @@ async def on_ready():
         # 30分ごとの自動更新開始
         if not update_train_info.is_running():
             update_train_info.start()
+    if not client.presence_task_started:
+        client.loop.create_task(update_presence())
+        client.presence_task_started = True
+
+async def update_presence():
+    while True:
+        try:
+            ping = round(client.latency * 1000)
+            await client.change_presence(activity=discord.Game(name=f"Ping: {ping}ms"))
+            await asyncio.sleep(5)
+            await client.change_presence(activity=discord.Game(name=f"サーバー数: {len(client.guilds)}"))
+            await asyncio.sleep(5)
+        except Exception as e:
+            print(f"[update_presence エラー] {e}")
+            await asyncio.sleep(10)
 
 @bot.event
 async def on_command_error(ctx, error):
